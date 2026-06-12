@@ -1,0 +1,224 @@
+{
+  "_metadata": {
+    "version": "1.1",
+    "last_updated": "2026-02-02",
+    "description": "Crisis detection keywords for Sisly safety layer",
+    "languages": ["en", "ar"],
+    "dialects": ["msa", "gulf"],
+    "notes": "Keywords must be matched case-insensitively. Patterns support 'exact' and 'regex' types. Arabic includes both MSA and Gulf dialect variations."
+  },
+  "categories": {
+    "suicide": {
+      "severity": "critical",
+      "description": "Suicidal ideation or intent",
+      "patterns": {
+        "en": [
+          {"text": "kill myself", "type": "exact"},
+          {"text": "want to die", "type": "exact"},
+          {"text": "end my life", "type": "exact"},
+          {"text": "take my own life", "type": "exact"},
+          {"text": "suicide", "type": "exact"},
+          {"text": "suicidal", "type": "exact"},
+          {"text": "don't want to live", "type": "exact"},
+          {"text": "wish i was dead", "type": "exact"},
+          {"text": "better off dead", "type": "exact"},
+          {"text": "no reason to live", "type": "exact"},
+          {"text": "end it all", "type": "exact"},
+          {"text": "can't go on", "type": "exact"},
+          {"text": "want to disappear", "type": "exact"},
+          {"text": "planning to end", "type": "exact"},
+          {"text": "going to kill myself", "type": "exact"}
+        ],
+        "ar": [
+          {"text": "أريد أن أموت", "type": "exact"},
+          {"text": "اريد ان اموت", "type": "exact"},
+          {"text": "أقتل نفسي", "type": "exact"},
+          {"text": "اقتل نفسي", "type": "exact"},
+          {"text": "انتحار", "type": "exact"},
+          {"text": "انتحر", "type": "exact"},
+          {"text": "سأنتحر", "type": "exact"},
+          {"text": "سانتحر", "type": "exact"},
+          {"text": "أنهي حياتي", "type": "exact"},
+          {"text": "انهي حياتي", "type": "exact"},
+          {"text": "لا أريد أن أعيش", "type": "exact"},
+          {"text": "لا اريد ان اعيش", "type": "exact"},
+          {"text": "أفضل لو كنت ميت", "type": "exact"},
+          {"text": "افضل لو كنت ميت", "type": "exact"},
+          {"text": "الموت أفضل", "type": "exact"},
+          {"text": "الموت افضل", "type": "exact"},
+          {"text": "تعبت من الحياة", "type": "exact"},
+          {"text": "بنتحر", "type": "exact"},
+          {"text": "ودي اموت", "type": "exact"},
+          {"text": "ابي اموت", "type": "exact"},
+          {"text": "ماني قادر اكمل", "type": "exact"},
+          {"text": "مابي اعيش", "type": "exact"},
+          {"text": "خلاص تعبت", "type": "exact"},
+          {"text": "ماله داعي اعيش", "type": "exact"}
+        ]
+      }
+    },
+    "self_harm": {
+      "severity": "high",
+      "description": "Self-harm or self-injury",
+      "patterns": {
+        "en": [
+          {"text": "hurt myself", "type": "exact"},
+          {"text": "harm myself", "type": "exact"},
+          {"text": "cutting myself", "type": "exact"},
+          {"text": "cut myself", "type": "exact"},
+          {"text": "self harm", "type": "exact"},
+          {"text": "self-harm", "type": "exact"},
+          {"text": "burning myself", "type": "exact"},
+          {"text": "hitting myself", "type": "exact"},
+          {"text": "hit myself", "type": "exact"},
+          {"text": "punish myself", "type": "exact"},
+          {"text": "scratch myself", "type": "exact"},
+          {"text": "injure myself", "type": "exact"}
+        ],
+        "ar": [
+          {"text": "أؤذي نفسي", "type": "exact"},
+          {"text": "اؤذي نفسي", "type": "exact"},
+          {"text": "أجرح نفسي", "type": "exact"},
+          {"text": "اجرح نفسي", "type": "exact"},
+          {"text": "إيذاء النفس", "type": "exact"},
+          {"text": "ايذاء النفس", "type": "exact"},
+          {"text": "أقطع نفسي", "type": "exact"},
+          {"text": "اقطع نفسي", "type": "exact"},
+          {"text": "أضرب نفسي", "type": "exact"},
+          {"text": "اضرب نفسي", "type": "exact"}
+        ]
+      }
+    },
+    "harm_to_others": {
+      "severity": "critical",
+      "description": "Intent to harm others",
+      "patterns": {
+        "en": [
+          {"text": "kill someone", "type": "exact"},
+          {"text": "hurt someone", "type": "exact"},
+          {"text": "want to hurt them", "type": "exact"},
+          {"text": "going to hurt", "type": "exact"},
+          {"text": "murder", "type": "exact"},
+          {"text": "planning to attack", "type": "exact"},
+          {"text": "make them pay", "type": "exact"},
+          {"text": "going to kill them", "type": "exact"},
+          {"text": "want them dead", "type": "exact"}
+        ],
+        "ar": [
+          {"text": "أقتل شخص", "type": "exact"},
+          {"text": "اقتل شخص", "type": "exact"},
+          {"text": "أؤذي شخص", "type": "exact"},
+          {"text": "اؤذي شخص", "type": "exact"},
+          {"text": "أريد أن أقتله", "type": "exact"},
+          {"text": "اريد ان اقتله", "type": "exact"},
+          {"text": "سأقتله", "type": "exact"},
+          {"text": "ساقتله", "type": "exact"}
+        ]
+      }
+    },
+    "abuse": {
+      "severity": "critical",
+      "description": "Currently experiencing abuse",
+      "patterns": {
+        "en": [
+          {"text": "being abused", "type": "exact"},
+          {"text": "abusing me", "type": "exact"},
+          {"text": "hitting me", "type": "exact"},
+          {"text": "beats me", "type": "exact"},
+          {"text": "beating me", "type": "exact"},
+          {"text": "hurting me", "type": "exact"},
+          {"text": "sexually abused", "type": "exact"},
+          {"text": "molested", "type": "exact"},
+          {"text": "assaulted me", "type": "exact"},
+          {"text": "forced me", "type": "exact"},
+          {"text": "raped", "type": "exact"},
+          {"text": "domestic violence", "type": "exact"},
+          {"text": "he hits me", "type": "exact"},
+          {"text": "she hits me", "type": "exact"},
+          {"text": "partner hits me", "type": "exact"},
+          {"text": "spouse hits me", "type": "exact"},
+          {"text": "physically abused", "type": "exact"}
+        ],
+        "ar": [
+          {"text": "يضربني", "type": "exact"},
+          {"text": "تضربني", "type": "exact"},
+          {"text": "يؤذيني", "type": "exact"},
+          {"text": "تؤذيني", "type": "exact"},
+          {"text": "اعتداء", "type": "exact"},
+          {"text": "تحرش", "type": "exact"},
+          {"text": "اغتصاب", "type": "exact"},
+          {"text": "عنف أسري", "type": "exact"},
+          {"text": "عنف اسري", "type": "exact"},
+          {"text": "يعنفني", "type": "exact"},
+          {"text": "تعنفني", "type": "exact"}
+        ]
+      }
+    },
+    "medical_emergency": {
+      "severity": "critical",
+      "description": "Immediate medical emergency",
+      "patterns": {
+        "en": [
+          {"text": "overdose", "type": "exact"},
+          {"text": "took too many pills", "type": "exact"},
+          {"text": "swallowed pills", "type": "exact"},
+          {"text": "bleeding heavily", "type": "exact"},
+          {"text": "can't breathe", "type": "exact"},
+          {"text": "having a heart attack", "type": "exact"},
+          {"text": "poisoned myself", "type": "exact"},
+          {"text": "drank bleach", "type": "exact"},
+          {"text": "ingested poison", "type": "exact"},
+          {"text": "took poison", "type": "exact"}
+        ],
+        "ar": [
+          {"text": "جرعة زائدة", "type": "exact"},
+          {"text": "تناولت حبوب كثيرة", "type": "exact"},
+          {"text": "شربت سم", "type": "exact"},
+          {"text": "لا أستطيع التنفس", "type": "exact"},
+          {"text": "لا استطيع التنفس", "type": "exact"},
+          {"text": "نزيف شديد", "type": "exact"},
+          {"text": "سممت نفسي", "type": "exact"}
+        ]
+      }
+    },
+    "psychosis": {
+      "severity": "high",
+      "description": "Signs of psychotic symptoms",
+      "patterns": {
+        "en": [
+          {"text": "hearing voices", "type": "exact"},
+          {"text": "voices telling me", "type": "exact"},
+          {"text": "people are watching me", "type": "exact"},
+          {"text": "being followed", "type": "exact"},
+          {"text": "they're after me", "type": "exact"},
+          {"text": "government is tracking", "type": "exact"},
+          {"text": "mind is being controlled", "type": "exact"},
+          {"text": "thoughts being read", "type": "exact"},
+          {"text": "seeing things that aren't there", "type": "exact"},
+          {"text": "not real anymore", "type": "exact"}
+        ],
+        "ar": [
+          {"text": "أسمع أصوات", "type": "exact"},
+          {"text": "اسمع اصوات", "type": "exact"},
+          {"text": "الأصوات تخبرني", "type": "exact"},
+          {"text": "الاصوات تخبرني", "type": "exact"},
+          {"text": "يراقبونني", "type": "exact"},
+          {"text": "يتبعونني", "type": "exact"},
+          {"text": "يسيطرون على عقلي", "type": "exact"},
+          {"text": "أرى أشياء", "type": "exact"},
+          {"text": "ارى اشياء", "type": "exact"}
+        ]
+      }
+    }
+  },
+  "response_templates": {
+    "critical": {
+      "en": "I hear that you're going through something really difficult right now. Your safety matters, and I want to make sure you get the right support.",
+      "ar": "أسمعك وأفهم أنك تمر بوقت صعب جداً الآن. سلامتك مهمة، وأريد التأكد من حصولك على الدعم المناسب."
+    },
+    "high": {
+      "en": "What you're describing sounds really hard. I care about your wellbeing and want to make sure you're safe.",
+      "ar": "ما تصفه يبدو صعباً جداً. أهتم بسلامتك وأريد التأكد من أنك بخير."
+    }
+  }
+}

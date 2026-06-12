@@ -1,0 +1,197 @@
+<?php
+
+declare(strict_types=1);
+
+return [
+    /*
+    |--------------------------------------------------------------------------
+    | LLM Provider Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configure the primary and fallback LLM providers. The system will
+    | automatically fail over to the fallback provider if the primary fails.
+    |
+    | Supported providers: "openai", "gemini", "anthropic", "mock"
+    |
+    */
+    'llm' => [
+        // Provider to use: "openai", "gemini", "anthropic", or "mock" for testing
+        'driver' => env('SISLY_LLM_DRIVER', 'openai'),
+
+        // Enable failover to backup provider
+        'failover_enabled' => env('SISLY_LLM_FAILOVER', true),
+
+        // Number of failures before circuit breaker trips
+        'failure_threshold' => env('SISLY_LLM_FAILURE_THRESHOLD', 5),
+
+        // OpenAI configuration
+        'openai' => [
+            'api_key' => env('OPENAI_API_KEY'),
+            'model' => env('OPENAI_MODEL', 'gpt-4-turbo'),
+            'timeout' => env('OPENAI_TIMEOUT', 30),
+            'max_retries' => env('OPENAI_MAX_RETRIES', 3),
+            'retry_delay' => env('OPENAI_RETRY_DELAY', 1000), // milliseconds
+        ],
+
+        // Google Gemini configuration
+        'gemini' => [
+            'api_key' => env('GEMINI_API_KEY'),
+            'model' => env('GEMINI_MODEL', 'gemini-pro'),
+            'timeout' => env('GEMINI_TIMEOUT', 30),
+            'max_retries' => env('GEMINI_MAX_RETRIES', 3),
+            'retry_delay' => env('GEMINI_RETRY_DELAY', 1000), // milliseconds
+        ],
+
+        // Anthropic Claude configuration
+        'anthropic' => [
+            'api_key' => env('ANTHROPIC_API_KEY'),
+            'model' => env('ANTHROPIC_MODEL', 'claude-3-5-sonnet-latest'),
+            'timeout' => env('ANTHROPIC_TIMEOUT', 30),
+            'max_retries' => env('ANTHROPIC_MAX_RETRIES', 3),
+            'retry_delay' => env('ANTHROPIC_RETRY_DELAY', 1000), // milliseconds
+        ],
+
+        // Temperature settings per session state
+        'temperature' => [
+            'intake' => 0.7,
+            'exploration' => 0.7,
+            'deepening' => 0.6,
+            'problem_solving' => 0.5,
+            'closing' => 0.6,
+            'crisis_intervention' => 0.0, // Deterministic for safety
+        ],
+
+        // Token limits
+        'max_tokens' => [
+            'default' => 150,
+            'technique' => 300, // Technique instructions can be longer
+            'crisis' => 200,
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | FSM (Finite State Machine) Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configure the state machine behavior including maximum turns and
+    | turn limits per state.
+    |
+    */
+    'fsm' => [
+        // Hard cap on total turns (= 2 internal turns per user-perceived cycle).
+        // Acts as a runaway-LLM safety net. Bumped 20 → 40 in v1.2.1.
+        'max_total_turns' => 40,
+
+        // Wall-clock cap in seconds. Opt-in: null disables (matches v1.2.0
+        // behaviour). Set e.g. 600 for 10-minute sessions.
+        'max_session_seconds' => null,
+
+        // When true, transitioning into CLOSING immediately ends the session
+        // (the v1.2.0 behaviour — preserved as default for back-compat).
+        // Set to false for chat-app UX where CLOSING is a livable wrap-up
+        // state rather than a cliff.
+        'end_on_terminal_state' => true,
+
+        // Fraction of max_session_seconds at which the FSM force-transitions
+        // to CLOSING so the bot can wrap gracefully. Only fires when
+        // max_session_seconds is set. 0.85 ≈ ~1.5 min closing window in a
+        // 10-min budget.
+        'nearing_end_threshold' => 0.85,
+
+        // Per-state turn limits (in user-perceived cycles, NOT internal
+        // turns). Bumped in v1.2.1 to give each FSM phase more room to
+        // breathe before advancing.
+        'turn_limits' => [
+            'intake'          => 1,   // unchanged
+            'risk_triage'     => 0,   // unchanged (auto pass-through)
+            'exploration'     => 3,   // was 2
+            'deepening'       => 2,   // was 1
+            'problem_solving' => 5,   // was 3
+            'closing'         => 2,   // was 1 (matters when end_on_terminal_state=false)
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Session Storage Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configure how sessions are stored. The default uses Laravel's cache
+    | system, but Redis can be used for production workloads.
+    |
+    | Supported drivers: "cache", "redis"
+    |
+    */
+    'session' => [
+        'driver' => env('SISLY_SESSION_DRIVER', 'cache'),
+        'prefix' => 'sisly:session:',
+        'ttl' => 1800, // 30 minutes idle TTL in seconds
+
+        // FIFO cap on conversation history kept on the Session object —
+        // i.e. how many recent turns the LLM sees in its context. Bumped
+        // 20 → 40 in v1.2.1 so longer sessions stay coherent. (Each
+        // user-perceived cycle = 2 history entries: 1 user + 1 assistant.)
+        'max_history_turns' => 40,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Coach Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configure which coaches are enabled and the default coach to use
+    | when no specific coach is requested.
+    |
+    */
+    'coaches' => [
+        'default' => 'meetly',
+        'enabled' => ['meetly', 'vento', 'loopy', 'presso', 'boostly', 'safeo'],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Safety Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configure safety features including crisis detection and post-response
+    | validation. These settings are critical for user safety.
+    |
+    | WARNING: Do not disable crisis_detection in production!
+    |
+    */
+    'safety' => [
+        'crisis_detection' => true,
+        'crisis_lexicon_path' => null, // Use package default if null
+        'post_response_validation' => true,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Arabic/Bilingual Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configure Arabic language support for GCC users. When enabled, responses
+    | can include an Arabic "mirror" translation.
+    |
+    */
+    'arabic' => [
+        'enabled' => true,
+        'dialect' => 'gulf', // "gulf" (Khaleeji) or "msa" (Modern Standard Arabic)
+        'mirror_enabled' => true,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Crisis Resources Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configure crisis resources (hotlines, emergency contacts) for different
+    | countries. The package includes GCC defaults.
+    |
+    */
+    'crisis_resources' => [
+        'use_package_defaults' => true, // Use built-in GCC resources
+        'custom_path' => null,          // Path to custom crisis resources JSON
+    ],
+];

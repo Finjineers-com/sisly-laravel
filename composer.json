@@ -1,0 +1,70 @@
+{
+    "name": "sisly/sisly-laravel",
+    "description": "AI emotional coaching package for Laravel with 5 specialized coaches for GCC market",
+    "type": "library",
+    "license": "proprietary",
+    "keywords": [
+        "laravel",
+        "ai",
+        "coaching",
+        "emotional-support",
+        "mental-health",
+        "gcc"
+    ],
+    "authors": [
+        {
+            "name": "Sisly Team"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "illuminate/support": "^10.0|^11.0|^12.0",
+        "illuminate/contracts": "^10.0|^11.0|^12.0",
+        "illuminate/cache": "^10.0|^11.0|^12.0",
+        "illuminate/events": "^10.0|^11.0|^12.0",
+        "illuminate/http": "^10.0|^11.0|^12.0",
+        "guzzlehttp/guzzle": "^7.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^8.0|^9.0|^10.0",
+        "phpunit/phpunit": "^10.0|^11.0",
+        "phpstan/phpstan": "^1.10|^2.0",
+        "laravel/pint": "^1.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Sisly\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Sisly\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Sisly\\SislyServiceProvider"
+            ],
+            "aliases": {
+                "Sisly": "Sisly\\Facades\\Sisly"
+            }
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "phpstan/extension-installer": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "scripts": {
+        "test": "vendor/bin/phpunit",
+        "test:unit": "vendor/bin/phpunit --testsuite Unit",
+        "test:integration": "vendor/bin/phpunit --testsuite Integration",
+        "test:all": "vendor/bin/phpunit --testsuite All",
+        "analyse": "vendor/bin/phpstan analyse",
+        "format": "vendor/bin/pint"
+    }
+}

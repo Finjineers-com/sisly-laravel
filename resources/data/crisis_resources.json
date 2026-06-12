@@ -1,0 +1,448 @@
+{
+  "_metadata": {
+    "version": "1.0",
+    "last_updated": "2026-02-01",
+    "coverage": "GCC",
+    "notes": "Crisis resources for Gulf Cooperation Council countries. Verify numbers periodically."
+  },
+  "countries": {
+    "AE": {
+      "name": "United Arab Emirates",
+      "name_ar": "الإمارات العربية المتحدة",
+      "emergency_number": "999",
+      "resources": [
+        {
+          "id": "ae-police",
+          "name": "Police Emergency",
+          "name_ar": "الشرطة - طوارئ",
+          "phone": "999",
+          "type": "emergency",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "ae-ambulance",
+          "name": "Ambulance",
+          "name_ar": "الإسعاف",
+          "phone": "998",
+          "type": "emergency",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "ae-mental-health-dubai",
+          "name": "Dubai Health Authority - Mental Health Helpline",
+          "name_ar": "هيئة الصحة بدبي - خط مساعدة الصحة النفسية",
+          "phone": "800342",
+          "type": "hotline",
+          "available_24_7": false,
+          "languages": ["ar", "en"],
+          "regions": ["Dubai"]
+        },
+        {
+          "id": "ae-hope-line",
+          "name": "HOPE Consortium Mental Health Line",
+          "name_ar": "خط هوب للصحة النفسية",
+          "phone": "800HOPE",
+          "phone_numeric": "8004673",
+          "type": "hotline",
+          "available_24_7": true,
+          "languages": ["ar", "en"],
+          "url": "https://www.hope.ae"
+        },
+        {
+          "id": "ae-child-protection",
+          "name": "Child Protection Helpline",
+          "name_ar": "خط حماية الطفل",
+          "phone": "800988",
+          "type": "child_protection",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "ae-domestic-violence",
+          "name": "Dubai Foundation for Women and Children",
+          "name_ar": "مؤسسة دبي لرعاية النساء والأطفال",
+          "phone": "800111",
+          "type": "domestic_violence",
+          "available_24_7": true,
+          "languages": ["ar", "en"],
+          "url": "https://www.dfwac.ae"
+        },
+        {
+          "id": "ae-poison",
+          "name": "Poison Control Center",
+          "name_ar": "مركز السموم",
+          "phone": "800424",
+          "type": "poison_control",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "ae-community-dev",
+          "name": "Ministry of Community Development Support Line",
+          "name_ar": "وزارة تنمية المجتمع - خط الدعم",
+          "phone": "800623",
+          "type": "social_support",
+          "available_24_7": false,
+          "languages": ["ar", "en"]
+        }
+      ],
+      "regions": {
+        "Dubai": {
+          "name": "Dubai",
+          "name_ar": "دبي",
+          "additional_resources": [
+            {
+              "id": "ae-dubai-police",
+              "name": "Dubai Police",
+              "name_ar": "شرطة دبي",
+              "phone": "901",
+              "type": "emergency",
+              "available_24_7": true,
+              "languages": ["ar", "en"]
+            }
+          ]
+        },
+        "Abu Dhabi": {
+          "name": "Abu Dhabi",
+          "name_ar": "أبوظبي",
+          "additional_resources": [
+            {
+              "id": "ae-abudhabi-police",
+              "name": "Abu Dhabi Police",
+              "name_ar": "شرطة أبوظبي",
+              "phone": "8002626",
+              "type": "emergency",
+              "available_24_7": true,
+              "languages": ["ar", "en"]
+            }
+          ]
+        }
+      }
+    },
+    "SA": {
+      "name": "Saudi Arabia",
+      "name_ar": "المملكة العربية السعودية",
+      "emergency_number": "911",
+      "resources": [
+        {
+          "id": "sa-emergency",
+          "name": "Unified Emergency Number",
+          "name_ar": "رقم الطوارئ الموحد",
+          "phone": "911",
+          "type": "emergency",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "sa-police",
+          "name": "Police",
+          "name_ar": "الشرطة",
+          "phone": "999",
+          "type": "emergency",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "sa-ambulance",
+          "name": "Red Crescent Ambulance",
+          "name_ar": "إسعاف الهلال الأحمر",
+          "phone": "997",
+          "type": "emergency",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "sa-mental-health",
+          "name": "Mental Health Helpline (MOH)",
+          "name_ar": "خط مساندة للصحة النفسية",
+          "phone": "920033360",
+          "type": "hotline",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "sa-family-protection",
+          "name": "Family Protection Helpline",
+          "name_ar": "خط حماية الأسرة",
+          "phone": "1919",
+          "type": "domestic_violence",
+          "available_24_7": true,
+          "languages": ["ar"]
+        },
+        {
+          "id": "sa-child-helpline",
+          "name": "Child Helpline",
+          "name_ar": "خط مساندة الطفل",
+          "phone": "116111",
+          "type": "child_protection",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "sa-poison",
+          "name": "Poison Control Center",
+          "name_ar": "مركز السموم",
+          "phone": "920001897",
+          "type": "poison_control",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        }
+      ]
+    },
+    "KW": {
+      "name": "Kuwait",
+      "name_ar": "الكويت",
+      "emergency_number": "112",
+      "resources": [
+        {
+          "id": "kw-emergency",
+          "name": "Emergency Services",
+          "name_ar": "خدمات الطوارئ",
+          "phone": "112",
+          "type": "emergency",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "kw-police",
+          "name": "Police",
+          "name_ar": "الشرطة",
+          "phone": "112",
+          "type": "emergency",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "kw-ambulance",
+          "name": "Ambulance",
+          "name_ar": "الإسعاف",
+          "phone": "112",
+          "type": "emergency",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "kw-mental-health",
+          "name": "Kuwait Psychological Association Helpline",
+          "name_ar": "جمعية علم النفس الكويتية",
+          "phone": "94094000",
+          "type": "hotline",
+          "available_24_7": false,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "kw-social-affairs",
+          "name": "Ministry of Social Affairs Hotline",
+          "name_ar": "وزارة الشؤون الاجتماعية",
+          "phone": "147",
+          "type": "social_support",
+          "available_24_7": false,
+          "languages": ["ar"]
+        }
+      ]
+    },
+    "QA": {
+      "name": "Qatar",
+      "name_ar": "قطر",
+      "emergency_number": "999",
+      "resources": [
+        {
+          "id": "qa-police",
+          "name": "Police Emergency",
+          "name_ar": "الشرطة - طوارئ",
+          "phone": "999",
+          "type": "emergency",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "qa-ambulance",
+          "name": "Ambulance",
+          "name_ar": "الإسعاف",
+          "phone": "999",
+          "type": "emergency",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "qa-mental-health",
+          "name": "Mental Health Helpline (Hamad Medical)",
+          "name_ar": "خط الصحة النفسية - حمد الطبية",
+          "phone": "16000",
+          "type": "hotline",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "qa-family-counseling",
+          "name": "Qatar Foundation Family Counseling",
+          "name_ar": "مؤسسة قطر للإرشاد الأسري",
+          "phone": "44174174",
+          "type": "social_support",
+          "available_24_7": false,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "qa-child-protection",
+          "name": "Child & Women Protection Center",
+          "name_ar": "مركز حماية الطفل والمرأة",
+          "phone": "919",
+          "type": "child_protection",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        }
+      ]
+    },
+    "BH": {
+      "name": "Bahrain",
+      "name_ar": "البحرين",
+      "emergency_number": "999",
+      "resources": [
+        {
+          "id": "bh-emergency",
+          "name": "Emergency Services",
+          "name_ar": "خدمات الطوارئ",
+          "phone": "999",
+          "type": "emergency",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "bh-police",
+          "name": "Police",
+          "name_ar": "الشرطة",
+          "phone": "999",
+          "type": "emergency",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "bh-ambulance",
+          "name": "Ambulance",
+          "name_ar": "الإسعاف",
+          "phone": "999",
+          "type": "emergency",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "bh-mental-health",
+          "name": "Psychiatric Hospital Helpline",
+          "name_ar": "مستشفى الطب النفسي",
+          "phone": "17279180",
+          "type": "hotline",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "bh-family-support",
+          "name": "Family Support Center",
+          "name_ar": "مركز دعم الأسرة",
+          "phone": "80008001",
+          "type": "domestic_violence",
+          "available_24_7": false,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "bh-child-helpline",
+          "name": "Child Helpline",
+          "name_ar": "خط نجدة الطفل",
+          "phone": "998",
+          "type": "child_protection",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        }
+      ]
+    },
+    "OM": {
+      "name": "Oman",
+      "name_ar": "عُمان",
+      "emergency_number": "9999",
+      "resources": [
+        {
+          "id": "om-police",
+          "name": "Royal Oman Police",
+          "name_ar": "شرطة عُمان السلطانية",
+          "phone": "9999",
+          "type": "emergency",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "om-ambulance",
+          "name": "Ambulance",
+          "name_ar": "الإسعاف",
+          "phone": "9999",
+          "type": "emergency",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "om-mental-health",
+          "name": "Mental Health Helpline (MOH)",
+          "name_ar": "خط الصحة النفسية",
+          "phone": "1212",
+          "type": "hotline",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        },
+        {
+          "id": "om-family-protection",
+          "name": "Family Protection Department",
+          "name_ar": "دائرة حماية الأسرة",
+          "phone": "80077444",
+          "type": "domestic_violence",
+          "available_24_7": true,
+          "languages": ["ar"]
+        },
+        {
+          "id": "om-child-helpline",
+          "name": "Child Helpline",
+          "name_ar": "خط حماية الطفل",
+          "phone": "1100",
+          "type": "child_protection",
+          "available_24_7": true,
+          "languages": ["ar", "en"]
+        }
+      ]
+    }
+  },
+  "resource_types": {
+    "emergency": {
+      "label": "Emergency Services",
+      "label_ar": "خدمات الطوارئ",
+      "priority": 1
+    },
+    "hotline": {
+      "label": "Mental Health Hotline",
+      "label_ar": "خط الصحة النفسية",
+      "priority": 2
+    },
+    "domestic_violence": {
+      "label": "Domestic Violence Support",
+      "label_ar": "دعم ضحايا العنف الأسري",
+      "priority": 3
+    },
+    "child_protection": {
+      "label": "Child Protection",
+      "label_ar": "حماية الطفل",
+      "priority": 4
+    },
+    "poison_control": {
+      "label": "Poison Control",
+      "label_ar": "مركز السموم",
+      "priority": 5
+    },
+    "social_support": {
+      "label": "Social Support",
+      "label_ar": "الدعم الاجتماعي",
+      "priority": 6
+    }
+  },
+  "disclaimer": {
+    "en": "If you are in immediate danger, please contact emergency services. This AI is not a substitute for professional help.",
+    "ar": "إذا كنت في خطر فوري، يرجى الاتصال بخدمات الطوارئ. هذا الذكاء الاصطناعي ليس بديلاً عن المساعدة المتخصصة."
+  }
+}
