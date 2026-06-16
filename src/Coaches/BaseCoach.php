@@ -23,6 +23,7 @@ abstract class BaseCoach implements CoachInterface
     protected CoEEngine $coeEngine;
     protected IdentityQuestionDetector $identityDetector;
     protected CredentialQuestionDetector $credentialDetector;
+    protected PrescriptionParser $prescriptionParser;
 
     public function __construct(
         protected readonly LLMProviderInterface $llm,
@@ -30,11 +31,13 @@ abstract class BaseCoach implements CoachInterface
         ?CoEEngine $coeEngine = null,
         ?IdentityQuestionDetector $identityDetector = null,
         ?CredentialQuestionDetector $credentialDetector = null,
+        ?PrescriptionParser $prescriptionParser = null,
     ) {
         $this->promptLoader = $promptLoader ?? new PromptLoader();
         $this->coeEngine = $coeEngine ?? new CoEEngine($llm);
         $this->identityDetector = $identityDetector ?? new IdentityQuestionDetector();
         $this->credentialDetector = $credentialDetector ?? new CredentialQuestionDetector();
+        $this->prescriptionParser = $prescriptionParser ?? (function_exists('app') && app()->bound(PrescriptionParser::class) ? app(PrescriptionParser::class) : new PrescriptionParser());
     }
 
     /**
@@ -83,15 +86,25 @@ abstract class BaseCoach implements CoachInterface
         $coeResult = $this->coeEngine->reason($session, $message, $systemPrompt);
 
         // Generate response using LLM (in user's preferred language)
-        $response = $this->generateResponse($session, $message, $systemPrompt, $statePrompt);
+        $rawResponse = $this->generateResponse($session, $message, $systemPrompt, $statePrompt);
 
-        // Note: Arabic mirror is no longer generated - responses are single-language
-        // based on user preference (EN or AR, not both)
+        $prescription = null;
+        $cleanResponse = $rawResponse;
+
+        // Parse prescription if enabled
+        if ($this->getConfig('sisly.prescription.enabled', true)) {
+            $parsed = $this->prescriptionParser->parse($rawResponse);
+            $cleanResponse = $parsed['text'];
+            $prescription = $parsed['prescription'];
+        }
+
+        $response = $this->cleanResponse($cleanResponse);
 
         return [
             'response' => $response,
             'arabic_mirror' => null, // Single-language mode: no mirror needed
             'coe_trace' => $session->preferences->includeCoETrace ? $coeResult : null,
+            'prescription' => $prescription,
         ];
     }
 
@@ -295,9 +308,15 @@ PROMPT;
         // the prompt) from overriding meta-question handling via recency bias.
         $fullSystemPrompt = $systemPrompt . "\n\n" . $statePrompt . "\n\n" . $this->getIdentityAnchor($session);
 
+        // Determine max tokens dynamically
+        $maxTokens = 150;
+        if ($this->getConfig('sisly.prescription.enabled', true) && $session->state === SessionState::PROBLEM_SOLVING) {
+            $maxTokens = $this->getConfig('sisly.prescription.max_tokens_handoff', 400);
+        }
+
         $response = $this->llm->chat($messages, $fullSystemPrompt, [
             'temperature' => $this->getTemperatureForState($session->state),
-            'max_tokens' => 150,
+            'max_tokens' => $maxTokens,
         ]);
 
         if (!$response->success) {
@@ -313,7 +332,7 @@ PROMPT;
             return $this->getFallbackResponse($session->state);
         }
 
-        return $this->cleanResponse($response->content);
+        return $response->content;
     }
 
     /**
@@ -413,4 +432,15 @@ PROMPT;
      * @return array<array{en: string, ar: string}>
      */
     abstract public function getGreetings(): array;
+
+    /**
+     * Get a configuration value safely without throwing container errors in unit tests.
+     */
+    protected function getConfig(string $key, mixed $default = null): mixed
+    {
+        if (function_exists('app') && app()->bound('config')) {
+            return config($key, $default);
+        }
+        return $default;
+    }
 }

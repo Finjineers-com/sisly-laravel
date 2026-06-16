@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-06-16
+
+### Added
+- **Content Prescription System**. Coaches can suggest media content cards (audio sessions, sounds, meditations, affirmations) at FSM `PROBLEM_SOLVING` state via a ```sisly ... ``` response block.
+- **Content Cache and Resolution**. New `PrescriptionResolver` automatically fetches content libraries from the host application's `/v1/insights/by-type` endpoint on session start or initialization, caching them per-session under `sisly:content_pool:{sessionId}`.
+- **Deduplication and Served Tracking**. Resolver tracks served items in Cache (`sisly:served_content:{sessionId}`) to prevent duplicate suggestions. Automatically clears served history (recycling the pool) when all assets have been suggested to the user.
+- **`ResolvedPrescription` DTO**. Packages content metadata (id, title, duration, media Category, audioPath, audioThumbnail) alongside the coach's warm language reason.
+- **`ContentType` Enum**. Backed string enum (`Meetings`, `Too much`, `Quiet mind`, `Let it out`, `Confidence`) representing valid media suggestion categories.
+- **Prescription Configuration**. New configurations added under `config/sisly.php`: `prescription.enabled`, `prescription.api_url`, `prescription.cache_ttl`, and `prescription.max_tokens_handoff`.
+- **Prompts Enrichment**. Expanded technique prompts for `meetly`, `presso`, `loopy`, `vento`, and `boostly` with strict Content Handoff instructions and JSON schemas.
+- New unit and integration test suites: `PrescriptionParserTest`, `PrescriptionResolverTest`, and `PrescriptionFlowIntegrationTest`. Test coverage expanded to **818 tests and 2023 assertions**, all passing green.
+
 ## [1.2.1] - 2026-04-28
 
 ### Added
@@ -240,6 +252,8 @@ The new opt-in flags (`max_session_seconds`, `end_on_terminal_state`, `nearing_e
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.3.0 | 2026-06-16 | Content Prescription & Caching system, DTOs, deduplication resolver, prompts |
+| 1.2.1 | 2026-04-28 | Wall-clock session cap, configurable LLM context, end_on_terminal_state flag, transition bridges |
 | 1.1.0 | 2026-02-26 | All 5 coaches, initSession(), single-language responses, FSM bug fix |
 | 1.0.0 | 2026-02-02 | Initial release with MEETLY coach, safety layer, and full GCC support |
 
@@ -292,6 +306,8 @@ If you were using a beta version:
 
 ---
 
-[Unreleased]: https://github.com/sisly/sisly-laravel/compare/v1.1.0...HEAD
-[1.1.0]: https://github.com/sisly/sisly-laravel/compare/v1.0.0...v1.1.0
-[1.0.0]: https://github.com/sisly/sisly-laravel/releases/tag/v1.0.0
+[Unreleased]: https://github.com/Finjineers-com/sisly-laravel/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/Finjineers-com/sisly-laravel/compare/v1.2.1...v1.3.0
+[1.2.1]: https://github.com/Finjineers-com/sisly-laravel/compare/v1.1.0...v1.2.1
+[1.1.0]: https://github.com/Finjineers-com/sisly-laravel/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/Finjineers-com/sisly-laravel/releases/tag/v1.0.0

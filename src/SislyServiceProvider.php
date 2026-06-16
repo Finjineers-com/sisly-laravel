@@ -22,6 +22,8 @@ use Sisly\Safety\CrisisHandler;
 use Sisly\Safety\CrisisResourceProvider;
 use Sisly\Safety\PostResponseValidator;
 use Sisly\Session\Adapters\LaravelCacheAdapter;
+use Sisly\Coaches\PrescriptionParser;
+use Sisly\Prescription\PrescriptionResolver;
 
 class SislyServiceProvider extends ServiceProvider
 {
@@ -44,6 +46,15 @@ class SislyServiceProvider extends ServiceProvider
         // Register FSM and Dispatcher
         $this->registerFSMComponents();
 
+        // Register prescription components
+        $this->app->singleton(PrescriptionParser::class, function ($app) {
+            return new PrescriptionParser();
+        });
+
+        $this->app->singleton(PrescriptionResolver::class, function ($app) {
+            return new PrescriptionResolver();
+        });
+
         // Register main manager
         $this->app->singleton(SislyManager::class, function ($app) {
             return new SislyManager(
@@ -56,6 +67,7 @@ class SislyServiceProvider extends ServiceProvider
                 dispatcher: $app->make(Dispatcher::class),
                 handoffDetector: $app->make(HandoffDetector::class),
                 coachRegistry: $app->make(CoachRegistry::class),
+                prescriptionResolver: $app->make(PrescriptionResolver::class),
             );
         });
 
@@ -285,6 +297,8 @@ class SislyServiceProvider extends ServiceProvider
             CoachRegistry::class,
             Dispatcher::class,
             HandoffDetector::class,
+            PrescriptionParser::class,
+            PrescriptionResolver::class,
         ];
     }
 }

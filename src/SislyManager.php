@@ -32,6 +32,7 @@ use Sisly\FSM\StateMachine;
 use Sisly\Safety\CrisisDetector;
 use Sisly\Safety\CrisisHandler;
 use Sisly\Safety\PostResponseValidator;
+use Sisly\Prescription\PrescriptionResolver;
 
 /**
  * Main service class for Sisly emotional coaching.
@@ -43,6 +44,8 @@ class SislyManager
     /**
      * @param array<string, mixed> $config
      */
+    private readonly PrescriptionResolver $prescriptionResolver;
+
     public function __construct(
         private readonly array $config,
         private readonly SessionStoreInterface $sessionStore,
@@ -53,7 +56,10 @@ class SislyManager
         private readonly Dispatcher $dispatcher,
         private readonly HandoffDetector $handoffDetector,
         private readonly ?CoachRegistry $coachRegistry = null,
-    ) {}
+        ?PrescriptionResolver $prescriptionResolver = null,
+    ) {
+        $this->prescriptionResolver = $prescriptionResolver ?? (function_exists('app') && app()->bound(PrescriptionResolver::class) ? app(PrescriptionResolver::class) : new PrescriptionResolver());
+    }
 
     /**
      * Start a new coaching session.
@@ -80,6 +86,14 @@ class SislyManager
             preferences: $preferences,
             maxHistoryTurns: $this->resolveMaxHistoryTurns(),
         );
+
+        // Warm prescription content pool if enabled
+        if ($this->config['prescription']['enabled'] ?? true) {
+            $contentType = $this->resolveContentTypeForCoach($coachId);
+            if ($contentType !== null) {
+                $this->prescriptionResolver->getContentPool($session, $contentType);
+            }
+        }
 
         // Dispatch session started event
         $this->dispatchSessionStartedEvent($session);
@@ -110,6 +124,13 @@ class SislyManager
         $responseText = $coachResult['response'];
         $arabicMirror = $coachResult['arabic_mirror'] ?? null;
         $coeTrace = $coachResult['coe_trace'] ?? null;
+        $prescription = $coachResult['prescription'] ?? null;
+
+        // Resolve prescription
+        $resolvedPrescription = null;
+        if ($prescription !== null && ($this->config['prescription']['enabled'] ?? true)) {
+            $resolvedPrescription = $this->prescriptionResolver->resolve($session, $prescription);
+        }
 
         // Validate response before sending
         $responseText = $this->validateAndSanitizeResponse($responseText, $session);
@@ -142,6 +163,7 @@ class SislyManager
             responseText: $responseText,
             arabicMirror: $arabicMirror,
             coeTrace: $coeTrace,
+            prescription: $resolvedPrescription,
         );
     }
 
@@ -173,6 +195,14 @@ class SislyManager
             preferences: $preferences,
             maxHistoryTurns: $this->resolveMaxHistoryTurns(),
         );
+
+        // Warm prescription content pool if enabled
+        if ($this->config['prescription']['enabled'] ?? true) {
+            $contentType = $this->resolveContentTypeForCoach($coachId);
+            if ($contentType !== null) {
+                $this->prescriptionResolver->getContentPool($session, $contentType);
+            }
+        }
 
         // Dispatch session started event
         $this->dispatchSessionStartedEvent($session);
@@ -323,6 +353,13 @@ class SislyManager
         $responseText = $coachResult['response'];
         $arabicMirror = $coachResult['arabic_mirror'] ?? null;
         $coeTrace = $coachResult['coe_trace'] ?? null;
+        $prescription = $coachResult['prescription'] ?? null;
+
+        // Resolve prescription
+        $resolvedPrescription = null;
+        if ($prescription !== null && ($this->config['prescription']['enabled'] ?? true)) {
+            $resolvedPrescription = $this->prescriptionResolver->resolve($session, $prescription);
+        }
 
         // Validate response before sending
         $responseText = $this->validateAndSanitizeResponse($responseText, $session);
@@ -372,6 +409,7 @@ class SislyManager
             arabicMirror: $arabicMirror,
             coeTrace: $coeTrace,
             handoffSuggested: $handoffSuggested,
+            prescription: $resolvedPrescription,
         );
     }
 
@@ -632,6 +670,9 @@ class SislyManager
 
         $this->endSessionInternal($session, 'manual');
 
+        // Clear prescription session caches
+        $this->prescriptionResolver->clearSessionCache($sessionId);
+
         // Drop the session from storage so sessionExists() reflects the end.
         // (Natural-end paths in message() still save the terminal session for
         // post-mortem inspection — this is the explicit-close case.)
@@ -847,6 +888,21 @@ class SislyManager
             SessionState::CLOSING => "You've done well to take this time for yourself. Remember, it's okay to feel what you're feeling.",
             SessionState::CRISIS_INTERVENTION => "I hear that you're going through something really difficult. Your safety matters.",
             default => "I'm here with you. Tell me more.",
+        };
+    }
+
+    /**
+     * Resolve CoachId to its corresponding insights API content_type parameter.
+     */
+    private function resolveContentTypeForCoach(CoachId $coachId): ?string
+    {
+        return match ($coachId) {
+            CoachId::MEETLY => 'Meetings',
+            CoachId::PRESSO => 'Too much',
+            CoachId::LOOPY => 'Quiet mind',
+            CoachId::VENTO => 'Let it out',
+            CoachId::BOOSTLY => 'Confidence',
+            default => null,
         };
     }
 }

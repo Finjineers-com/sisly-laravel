@@ -194,4 +194,19 @@ return [
         'use_package_defaults' => true, // Use built-in GCC resources
         'custom_path' => null,          // Path to custom crisis resources JSON
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Prescription Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configure the media content prescription and caching system.
+    |
+    */
+    'prescription' => [
+        'enabled' => env('SISLY_PRESCRIPTION_ENABLED', true),
+        'api_url' => env('SISLY_PRESCRIPTION_API_URL', 'https://api.sisly.ai/api/v1/insights/by-type'),
+        'cache_ttl' => env('SISLY_PRESCRIPTION_CACHE_TTL', 1800), // 30 minutes
+        'max_tokens_handoff' => env('SISLY_PRESCRIPTION_MAX_TOKENS_HANDOFF', 400),
+    ],
 ];

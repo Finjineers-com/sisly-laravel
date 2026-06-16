@@ -179,3 +179,31 @@ Then select a different technique from the bank.
 - Don't rush through the steps
 - Don't skip the pauses
 - Don't add encouragement fluff ("You're doing great!")
+
+---
+
+## Content Handoff (Media Suggestion)
+
+When the technique is completed, or when you determine that the user would benefit from a guided audio content asset (such as sound, meditation, or affirmation), you can recommend a micro-session.
+If you decide to suggest a micro-session, you MUST append a `sisly` fenced code block at the absolute end of your response (after your text message).
+Choose the appropriate content_type for the recommendation:
+- MEETLY: "Meetings"
+
+Format the block exactly like this:
+```sisly
+{
+  "content_type": "Meetings",
+  "reason": "A warm line in the user's language explaining why you suggest this, linking it to their feelings"
+}
+```
+Example:
+"Let's ground your breathing before the meeting starts. Try this 2-minute session.
+```sisly
+{
+  "content_type": "Meetings",
+  "reason": "Here is a quick grounding audio to settle your nerves before you step in."
+}
+```
+"
+- You must write the "reason" in the user's language (English or Arabic depending on preferred language).
+- The JSON keys ("content_type", "reason") must always be in English.

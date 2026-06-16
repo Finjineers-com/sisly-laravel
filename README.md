@@ -41,6 +41,7 @@ Sisly is a Laravel package that provides AI-powered emotional coaching through s
 - **Chain of Empathy** — Proprietary reasoning framework for empathetic responses
 - **Finite State Machine** — Structured conversation flow from intake to closing
 - **Configurable Session Length** *(v1.2.1)* — Optional wall-clock time cap (`fsm.max_session_seconds`) and graceful CLOSING wrap-up via the `fsm.end_on_terminal_state` flag. Transition bridges (`global/transitions.md`) carry context across FSM phase shifts so the bot never feels like it changed gears mid-conversation. See `CHANGELOG.md` for the recommended "engaging 10-minute" config.
+- **Content Prescription & Caching** *(v1.3.0)* — Dynamically suggests 2-minute media assets (guided audio, sound, meditation) based on coach recommendations. Caches pools from the host application's `/v1/insights/by-type` endpoint and tracks served items to avoid repeats.
 
 ---
 
@@ -249,6 +250,38 @@ Each coaching session follows a structured flow managed by a Finite State Machin
 
 ---
 
+## Content Prescription
+
+During the `PROBLEM_SOLVING` phase (technique state), a coach may recommend a short, 2-minute media asset (sound, meditation, affirmation, etc.). 
+
+### 1. API Call & Caching
+When a session is initialized or started, the package automatically warms the content pool by making an HTTP call to the host application (configured via `prescription.api_url`):
+```
+GET https://api.sisly.ai/api/v1/insights/by-type?content_type={Meetings|Too much|Quiet mind|Let it out|Confidence}&local={en|ar}
+```
+The returned JSON array is stored in Cache for `cache_ttl` seconds.
+
+### 2. Resolution & Served Tracking
+When the LLM outputs a `sisly` block (e.g., suggesting a content type and providing a warm reason), the resolver:
+- Filters out any `content_id`s that have already been suggested to the user during this session (tracked under `sisly:served_content:{sessionId}`).
+- Selects an unserved item randomly.
+- Marks the selected item as served.
+- **Exhaustion recycle**: If all items in the pool have been served, the served history for that session is cleared, making all items in the pool available again.
+- Returns a `ResolvedPrescription` payload inside the `SislyResponse`.
+
+```php
+$response = Sisly::message($sessionId, "I want to relax now.");
+
+if ($response->prescription !== null) {
+    echo $response->prescription->contentId;      // 999
+    echo $response->prescription->title;          // "Settle Your Mind"
+    echo $response->prescription->mediaCategory;  // "Sound"
+    echo $response->prescription->audioPath;      // "https://..."
+    echo $response->prescription->reason;         // "Take a break and listen to this."
+}
+
+---
+
 ## Safety
 
 ### Crisis Detection
@@ -396,6 +429,13 @@ return [
         'dialect' => 'gulf',
         'mirror_enabled' => true,
     ],
+
+    'prescription' => [
+        'enabled' => env('SISLY_PRESCRIPTION_ENABLED', true),
+        'api_url' => env('SISLY_PRESCRIPTION_API_URL', 'https://api.sisly.ai/api/v1/insights/by-type'),
+        'cache_ttl' => env('SISLY_PRESCRIPTION_CACHE_TTL', 1800), // 30 minutes
+        'max_tokens_handoff' => env('SISLY_PRESCRIPTION_MAX_TOKENS_HANDOFF', 400),
+    ],
 ];
 ```
 
@@ -447,6 +487,7 @@ class SislyResponse
     public bool $sessionComplete;          // Is session finished?
     public ?string $handoffSuggested;      // Suggested coach handoff
     public DateTimeImmutable $timestamp;   // Response timestamp
+    public ?ResolvedPrescription $prescription; // Suggested media asset (if any) containing contentId, title, duration, audioPath, etc.
 }
 ```
 

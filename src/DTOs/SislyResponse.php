@@ -26,6 +26,7 @@ final class SislyResponse
         public readonly bool $sessionComplete,
         public readonly ?string $handoffSuggested,
         public readonly DateTimeImmutable $timestamp,
+        public readonly ?ResolvedPrescription $prescription = null,
     ) {}
 
     /**
@@ -37,6 +38,7 @@ final class SislyResponse
         ?string $arabicMirror = null,
         ?CoETrace $coeTrace = null,
         ?string $handoffSuggested = null,
+        ?ResolvedPrescription $prescription = null,
     ): self {
         return new self(
             sessionId: $session->id,
@@ -51,6 +53,7 @@ final class SislyResponse
             sessionComplete: !$session->isActive || $session->state->isTerminal(),
             handoffSuggested: $handoffSuggested,
             timestamp: new DateTimeImmutable(),
+            prescription: $prescription,
         );
     }
 
@@ -78,6 +81,7 @@ final class SislyResponse
             'session_complete' => $this->sessionComplete,
             'handoff_suggested' => $this->handoffSuggested,
             'timestamp' => $this->timestamp->format('c'),
+            'prescription' => $this->prescription?->toArray(),
         ];
     }
 
