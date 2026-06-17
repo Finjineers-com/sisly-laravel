@@ -45,7 +45,7 @@ return [
         // Anthropic Claude configuration
         'anthropic' => [
             'api_key' => env('ANTHROPIC_API_KEY'),
-            'model' => env('ANTHROPIC_MODEL', 'claude-3-5-sonnet-latest'),
+            'model' => env('ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001'),
             'timeout' => env('ANTHROPIC_TIMEOUT', 30),
             'max_retries' => env('ANTHROPIC_MAX_RETRIES', 3),
             'retry_delay' => env('ANTHROPIC_RETRY_DELAY', 1000), // milliseconds
