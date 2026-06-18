@@ -8,6 +8,7 @@ use Illuminate\Support\Str;
 use Sisly\Arabic\LanguageDetector;
 use Sisly\Coaches\CoachRegistry;
 use Sisly\Contracts\AssetResolverInterface;
+use Sisly\Contracts\CoachAwareAssetResolverInterface;
 use Sisly\Contracts\CoachInterface;
 use Sisly\Contracts\LLMProviderInterface;
 use Sisly\Contracts\SessionStoreInterface;
@@ -161,7 +162,7 @@ class SislyManager
         }
 
         // Resolve prescription to asset if configured
-        $prescription = $this->maybeResolveAsset($prescription, $session->preferences->language);
+        $prescription = $this->maybeResolveAsset($prescription, $session);
 
         // Update summary from CoE trace
         if ($coeTrace !== null && method_exists($coeTrace, 'getCauseAnalysis')) {
@@ -324,7 +325,7 @@ class SislyManager
         }
 
         // Resolve prescription to asset
-        $prescription = $this->maybeResolveAsset($prescription, $session->preferences->language);
+        $prescription = $this->maybeResolveAsset($prescription, $session);
 
         $this->logTurnMetrics($session, $responseTimeMs, $safetyVerdict, $prescription);
         $this->sessionStore->save($session);
@@ -497,7 +498,7 @@ class SislyManager
     /**
      * Optionally resolve a prescription to a real content library asset.
      */
-    private function maybeResolveAsset(?Prescription $prescription, string $locale): ?Prescription
+    private function maybeResolveAsset(?Prescription $prescription, Session $session): ?Prescription
     {
         if ($prescription === null) {
             return null;
@@ -507,6 +508,17 @@ class SislyManager
 
         if (!$resolveAssets || $this->assetResolver === null) {
             return $prescription;
+        }
+
+        $locale = $session->preferences->language;
+        $coachId = $session->coachId->value;
+
+        if (function_exists('config')) {
+            config(['sisly.content_library.current_coach_id' => $coachId]);
+        }
+
+        if ($this->assetResolver instanceof CoachAwareAssetResolverInterface) {
+            return $this->assetResolver->resolveForCoach($coachId, $prescription, $locale) ?? $prescription;
         }
 
         return $this->assetResolver->resolve($prescription, $locale) ?? $prescription;

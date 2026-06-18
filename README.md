@@ -80,6 +80,11 @@ OPENAI_SAFETY_MODEL=gpt-4o-mini
 GEMINI_API_KEY=your-gemini-key
 GEMINI_MODEL=gemini-1.5-pro
 GEMINI_SAFETY_MODEL=gemini-1.5-flash
+
+# Content library resolver
+SISLY_RESOLVE_ASSETS=true
+SISLY_CONTENT_LIBRARY_ENDPOINT=https://api.sisly.ai/api/v1/insights/by-type
+SISLY_CONTENT_LIBRARY_DEFAULT_COACH=meetly
 ```
 
 ---
@@ -198,6 +203,22 @@ $response->coeTrace           // CoETrace|null (only when includeCoETrace=true)
 
 ## Wiring Your Content Library
 
+The package now ships with a real content-library resolver that reads from Sisly's content API and maps each coach to the correct library automatically:
+
+- `Meetly` -> `Meetings`
+- `Presso` -> `Too much`
+- `Loopy` -> `Quiet mind`
+- `Vento` -> `Let it out`
+- `Boostly` -> `Confidence`
+
+By default the package uses `Sisly\Resolvers\CoachMappedAssetResolver`, which calls:
+
+```text
+GET https://api.sisly.ai/api/v1/insights/by-type?content_type=...&local=english|arabic
+```
+
+If you need to override the lookup strategy, you can still bind your own resolver:
+
 ```php
 use Sisly\Contracts\AssetResolverInterface;
 use Sisly\DTOs\Prescription;
@@ -234,10 +255,12 @@ class MyAssetResolver implements AssetResolverInterface
 // config/sisly.php
 'prescription' => [
     'resolve_assets' => true,
-    'asset_resolver' => MyAssetResolver::class,
+    'asset_resolver' => \Sisly\Resolvers\CoachMappedAssetResolver::class,
     'locale_strict' => true, // Never recommend English asset in Arabic chat
 ],
 ```
+
+If you want to point the resolver at a different content service, keep the package interface in place and swap the configured resolver class.
 
 ---
 
@@ -308,7 +331,7 @@ See `config/sisly.php` for all options. Key sections:
     'max_total_turns' => 40,
 ],
 'prescription' => [
-    'resolve_assets' => false,      // Set true + wire AssetResolver
+    'resolve_assets' => true,       // Uses the real content-library resolver by default
     'locale_strict' => true,        // Never mix locales
 ],
 'language' => [

@@ -252,14 +252,29 @@ return [
     */
     'prescription' => [
         // Resolve prescription to a real content asset?
-        // Set true and implement AssetResolver to wire into your content library.
-        'resolve_assets' => env('SISLY_RESOLVE_ASSETS', false),
+        // Set true to resolve a real content asset from the library.
+        'resolve_assets' => env('SISLY_RESOLVE_ASSETS', true),
 
         // Asset resolver class (must implement AssetResolverInterface)
-        'asset_resolver' => null,
+        'asset_resolver' => \Sisly\Resolvers\CoachMappedAssetResolver::class,
 
         // Never recommend an English asset in an Arabic session (and vice versa)
         'locale_strict' => true,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Content Library Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Used by the default resolver to fetch real media recommendations.
+    |
+    */
+    'content_library' => [
+        'endpoint' => env('SISLY_CONTENT_LIBRARY_ENDPOINT', 'https://api.sisly.ai/api/v1/insights/by-type'),
+        'timeout' => env('SISLY_CONTENT_LIBRARY_TIMEOUT', 15),
+        'default_coach_id' => env('SISLY_CONTENT_LIBRARY_DEFAULT_COACH', 'meetly'),
+        'current_coach_id' => env('SISLY_CONTENT_LIBRARY_CURRENT_COACH_ID', null),
     ],
 
     /*
