@@ -6,6 +6,8 @@ namespace Sisly;
 
 use Illuminate\Support\Str;
 use Sisly\Coaches\CoachRegistry;
+use Sisly\Coaches\CredentialQuestionDetector;
+use Sisly\Coaches\IdentityQuestionDetector;
 use Sisly\Contracts\CoachInterface;
 use Sisly\Contracts\SessionStoreInterface;
 use Sisly\Dispatcher\Dispatcher;
@@ -45,6 +47,8 @@ class SislyManager
      * @param array<string, mixed> $config
      */
     private readonly PrescriptionResolver $prescriptionResolver;
+    private readonly IdentityQuestionDetector $identityDetector;
+    private readonly CredentialQuestionDetector $credentialDetector;
 
     public function __construct(
         private readonly array $config,
@@ -59,6 +63,8 @@ class SislyManager
         ?PrescriptionResolver $prescriptionResolver = null,
     ) {
         $this->prescriptionResolver = $prescriptionResolver ?? (function_exists('app') && app()->bound(PrescriptionResolver::class) ? app(PrescriptionResolver::class) : new PrescriptionResolver());
+        $this->identityDetector = new IdentityQuestionDetector();
+        $this->credentialDetector = new CredentialQuestionDetector();
     }
 
     /**
@@ -98,11 +104,8 @@ class SislyManager
         // Dispatch session started event
         $this->dispatchSessionStartedEvent($session);
 
-        // Add the user message as a turn
+        // Add the user message as a turn (always added to history for context continuity)
         $session->addTurn(ConversationTurn::user($message));
-
-        // Track turn in FSM (stateTurns persisted on Session object)
-        $this->stateMachine->incrementStateTurns($session);
 
         // SAFETY FIRST: Check for crisis before any LLM processing
         if ($this->isCrisisDetectionEnabled()) {
@@ -111,6 +114,19 @@ class SislyManager
             if ($crisisInfo->detected) {
                 return $this->handleCrisis($session, $crisisInfo, $geo);
             }
+        }
+
+        // Identity/credential questions are meta-questions that should NOT consume
+        // an FSM turn. The INTAKE state has a 1-turn limit; if the user opens with
+        // "what's your name?" the entire INTAKE budget is burned on a non-coaching
+        // exchange, pushing the first real message into EXPLORATION cold.
+        // Detect here at the manager level and skip incrementStateTurns() for these.
+        $isMetaQuestion = $this->credentialDetector->isCredentialQuestion($message)
+            || $this->identityDetector->isIdentityQuestion($message);
+
+        if (!$isMetaQuestion) {
+            // Track turn in FSM only for real coaching messages
+            $this->stateMachine->incrementStateTurns($session);
         }
 
         // Dispatch MessageReceived event
@@ -307,11 +323,8 @@ class SislyManager
         // giving the user a graceful wrap-up rather than an abrupt cutoff.
         $this->maybeForceClosingForTimeThreshold($session);
 
-        // Add user turn
+        // Add user turn (always added to history for context continuity)
         $session->addTurn(ConversationTurn::user($message));
-
-        // Track turn in FSM (stateTurns persisted on Session object)
-        $this->stateMachine->incrementStateTurns($session);
 
         // SAFETY FIRST: Check for crisis before any LLM processing
         if ($this->isCrisisDetectionEnabled()) {
@@ -320,6 +333,18 @@ class SislyManager
             if ($crisisInfo->detected) {
                 return $this->handleCrisis($session, $crisisInfo, $session->geo);
             }
+        }
+
+        // Identity/credential questions bypass the LLM and return hardcoded
+        // deterministic replies. They must NOT consume an FSM turn so that
+        // a user asking "who are you?" mid-session doesn't burn a coaching
+        // turn and skip a state prematurely.
+        $isMetaQuestion = $this->credentialDetector->isCredentialQuestion($message)
+            || $this->identityDetector->isIdentityQuestion($message);
+
+        if (!$isMetaQuestion) {
+            // Track turn in FSM only for real coaching messages
+            $this->stateMachine->incrementStateTurns($session);
         }
 
         // If already in crisis intervention, continue with crisis handling

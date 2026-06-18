@@ -98,6 +98,21 @@ class MeetlyCoach extends BaseCoach
         };
     }
 
+    protected function getInScopeDescription(): string
+    {
+        return 'meeting anxiety, presentation nerves, interview stress, performance reviews, pre/post-meeting emotions, fear of judgment in professional settings, speaking hesitation, physical anxiety symptoms before professional events';
+    }
+
+    protected function getOutOfScopeDescription(): string
+    {
+        return 'persistent rumination beyond the meeting context (→ LOOPY), deadline/workload overwhelm not meeting-specific (→ PRESSO), core self-worth or imposter feelings (→ BOOSTLY), anger at colleagues or boss (→ VENTO), big life decisions or job-security fear (→ SAFEO), relationship advice, medical advice, career coaching, productivity systems';
+    }
+
+    protected function getHandoffInstruction(): string
+    {
+        return "Acknowledge briefly, then say: \"What you're describing sounds more like [domain]. Would you like to talk to [COACH NAME] about this? I can help with the meeting-anxiety side if that's still part of it.\"";
+    }
+
     /**
      * Get the system prompt for a specific state.
      */

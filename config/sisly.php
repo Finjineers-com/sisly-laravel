@@ -80,8 +80,9 @@ return [
     */
     'fsm' => [
         // Hard cap on total turns (= 2 internal turns per user-perceived cycle).
-        // Acts as a runaway-LLM safety net. Bumped 20 → 40 in v1.2.1.
-        'max_total_turns' => 40,
+        // Acts as a runaway-LLM safety net. Set to 60 to support 15-20 user
+        // message conversations comfortably (each exchange = 2 internal turns).
+        'max_total_turns' => 60,
 
         // Wall-clock cap in seconds. Opt-in: null disables (matches v1.2.0
         // behaviour). Set e.g. 600 for 10-minute sessions.
@@ -99,16 +100,18 @@ return [
         // 10-min budget.
         'nearing_end_threshold' => 0.85,
 
-        // Per-state turn limits (in user-perceived cycles, NOT internal
-        // turns). Bumped in v1.2.1 to give each FSM phase more room to
-        // breathe before advancing.
+        // Per-state turn limits (in user-perceived cycles, NOT internal turns).
+        // Extended to give each FSM phase enough room for a natural 15-20
+        // message conversation. INTAKE is always 1 (first message only).
+        // PROBLEM_SOLVING is generous because technique delivery + follow-up
+        // questions can span many turns.
         'turn_limits' => [
-            'intake'          => 1,   // unchanged
-            'risk_triage'     => 0,   // unchanged (auto pass-through)
-            'exploration'     => 3,   // was 2
-            'deepening'       => 2,   // was 1
-            'problem_solving' => 5,   // was 3
-            'closing'         => 2,   // was 1 (matters when end_on_terminal_state=false)
+            'intake'          => 1,   // First message only — transitions immediately
+            'risk_triage'     => 0,   // Auto pass-through
+            'exploration'     => 4,   // Up to 4 exchanges to understand the issue
+            'deepening'       => 3,   // Summary + insight + time choice
+            'problem_solving' => 8,   // Technique delivery + check-ins + variants
+            'closing'         => 3,   // Check-in + anchor + end signal
         ],
     ],
 
@@ -129,10 +132,10 @@ return [
         'ttl' => 1800, // 30 minutes idle TTL in seconds
 
         // FIFO cap on conversation history kept on the Session object —
-        // i.e. how many recent turns the LLM sees in its context. Bumped
-        // 20 → 40 in v1.2.1 so longer sessions stay coherent. (Each
-        // user-perceived cycle = 2 history entries: 1 user + 1 assistant.)
-        'max_history_turns' => 40,
+        // i.e. how many recent turns the LLM sees in its context. Each
+        // user-perceived cycle = 2 history entries (1 user + 1 assistant).
+        // Set to 60 so a 20-message conversation is always fully in context.
+        'max_history_turns' => 60,
     ],
 
     /*

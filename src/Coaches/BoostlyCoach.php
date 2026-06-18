@@ -100,6 +100,21 @@ class BoostlyCoach extends BaseCoach
         };
     }
 
+    protected function getInScopeDescription(): string
+    {
+        return 'self-doubt, imposter syndrome, feeling like a fraud, not feeling good enough, fear of being found out or exposed, comparison spirals, new role anxiety, perfectionism paralysis, post-mistake confidence crash, reconnecting with actual competence and evidence of capability';
+    }
+
+    protected function getOutOfScopeDescription(): string
+    {
+        return 'meeting-specific anxiety (→ MEETLY), anger or frustration (→ VENTO), workload overwhelm (→ PRESSO), obsessive thought loops (→ LOOPY), big life decisions or job security (→ SAFEO), relationship advice, medical advice, career strategy, productivity coaching';
+    }
+
+    protected function getHandoffInstruction(): string
+    {
+        return "Acknowledge the self-doubt first, then say: \"What you're describing sounds like it's moved beyond self-doubt into [domain]. Would you like to talk to [COACH NAME] about that? I'm here for the self-worth piece whenever you need it.\"";
+    }
+
     /**
      * Get the system prompt for a specific state.
      */

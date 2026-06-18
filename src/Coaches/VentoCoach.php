@@ -100,6 +100,21 @@ class VentoCoach extends BaseCoach
         };
     }
 
+    protected function getInScopeDescription(): string
+    {
+        return 'anger, frustration, resentment, feeling disrespected, the need to vent, emotional discharge, unexpressed emotions, feeling unheard or dismissed at work or in relationships';
+    }
+
+    protected function getOutOfScopeDescription(): string
+    {
+        return 'meeting/presentation anxiety (→ MEETLY), rumination or replaying events obsessively (→ LOOPY), deadline/workload overwhelm (→ PRESSO), self-doubt or imposter syndrome (→ BOOSTLY), big life decisions or job-security fear (→ SAFEO), relationship advice, medical advice, legal advice, HR complaint guidance';
+    }
+
+    protected function getHandoffInstruction(): string
+    {
+        return "Acknowledge the emotion first, then say: \"It sounds like what's underneath this is more about [domain]. Would you like to talk to [COACH NAME] who specialises in that? I'm here for the anger and frustration piece whenever you need it.\"";
+    }
+
     /**
      * Get the system prompt for a specific state.
      */

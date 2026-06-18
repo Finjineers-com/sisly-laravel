@@ -61,45 +61,45 @@ class CoEEngine
     {
         $stateContext = $this->getStateContext($session->state);
         $historyContext = $this->getHistoryContext($session);
+        $turnNumber = (int) floor(count($session->getHistoryForLLM()) / 2) + 1;
 
         return <<<PROMPT
-You are performing Chain of Empathy (CoE) analysis on a user message.
+You are performing Chain of Empathy (CoE) analysis on a user message in an ongoing coaching conversation.
 
 Context:
 - Session state: {$session->state->value}
-- Turn count: {$session->turnCount}
+- Turn number: {$turnNumber}
 {$stateContext}
 {$historyContext}
 
-User message: "{$message}"
+Current user message: "{$message}"
+
+IMPORTANT: Consider the conversation history above. Do NOT suggest re-asking questions that have already been answered. Do NOT suggest strategies that have already been used. Advance the conversation.
 
 Analyze this message using the 5-step CoE framework:
 
-1. EMOTION: What is the user feeling?
-   - Primary emotion (dominant feeling)
+1. EMOTION: What is the user feeling RIGHT NOW?
+   - Primary emotion (dominant feeling in this message)
    - Secondary emotion (if present)
 
-2. CAUSE: What triggered this?
-   - Situational (external event)
-   - Cognitive (thought pattern)
-   - Relational (interpersonal)
+2. CAUSE: What triggered this? (situational/cognitive/relational)
 
-3. INTENT: What does the user need?
+3. INTENT: What does the user need from THIS turn?
    - validation (feeling heard)
    - venting (releasing pressure)
    - advice (concrete guidance)
    - understanding (making sense)
    - problem-solving (action steps)
 
-4. STRATEGY: What approach fits best?
-   - validation (acknowledge and normalize)
-   - exploration (ask clarifying question)
-   - reframe (shift perspective)
-   - technique (offer intervention)
-   - grounding (body-focused)
-   - containment (boundary setting)
+4. STRATEGY: What approach fits best for THIS turn given what has already happened?
+   - validation (acknowledge and normalize) — use when user still needs to feel heard
+   - exploration (ask clarifying question) — use only if critical info is still missing
+   - reframe (shift perspective) — use when user is ready for a new angle
+   - technique (offer intervention) — use when user is ready for a practical tool
+   - grounding (body-focused) — use when user is escalating
+   - containment (boundary setting) — use when topic is out of scope
 
-5. RESPONSE: Draft a response (20-25 words max)
+5. RESPONSE: Draft a response (20-30 words) appropriate for this turn in the conversation
 
 Output as JSON:
 {
@@ -133,6 +133,10 @@ PROMPT;
 
     /**
      * Get conversation history context.
+     *
+     * Includes up to the last 6 turns (3 exchanges) so the CoE analysis
+     * understands what has already been explored before this message,
+     * preventing repeated questions and improving strategy selection.
      */
     private function getHistoryContext(Session $session): string
     {
@@ -143,16 +147,18 @@ PROMPT;
         }
 
         $messageCount = count($history);
-        $lastMessages = array_slice($history, -2);
+        // Include last 6 turns (3 exchanges) for richer context
+        $recentMessages = array_slice($history, -6);
         $summary = [];
 
-        foreach ($lastMessages as $msg) {
+        foreach ($recentMessages as $msg) {
             $role = ucfirst($msg['role']);
-            $content = mb_substr($msg['content'], 0, 50) . (mb_strlen($msg['content']) > 50 ? '...' : '');
+            $content = mb_substr($msg['content'], 0, 100) . (mb_strlen($msg['content']) > 100 ? '...' : '');
             $summary[] = "{$role}: {$content}";
         }
 
-        return "- Conversation: {$messageCount} messages\n- Recent:\n  " . implode("\n  ", $summary);
+        $totalExchanges = (int) floor($messageCount / 2);
+        return "- Conversation: {$messageCount} turns ({$totalExchanges} exchanges)\n- Recent:\n  " . implode("\n  ", $summary);
     }
 
     /**

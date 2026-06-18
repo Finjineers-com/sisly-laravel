@@ -53,11 +53,7 @@ abstract class BaseCoach implements CoachInterface
      */
     public function process(Session $session, string $message): array
     {
-        // Credential / human-ness questions ("are you a therapist?", "are you human?",
-        // "هل انت حقيقية؟") bypass the LLM and return a deterministic disclaimer.
-        // Checked BEFORE the identity question because credential questions need a
-        // different shape of reply (disclaimer vs name+role) and the model must
-        // never claim a clinical credential, even probabilistically.
+        // Credential / human-ness questions bypass the LLM entirely.
         if ($this->credentialDetector->isCredentialQuestion($message)) {
             return [
                 'response' => $this->buildHardcodedCredentialReply($session),
@@ -66,10 +62,7 @@ abstract class BaseCoach implements CoachInterface
             ];
         }
 
-        // Identity questions ("what's your name?", "ما اسمك؟", etc.) bypass the
-        // LLM entirely and return a deterministic reply. Eliminates flakiness
-        // where the model would ignore the meta-question rule and run the
-        // standard intake script instead.
+        // Identity questions bypass the LLM entirely.
         if ($this->identityDetector->isIdentityQuestion($message)) {
             return [
                 'response' => $this->buildHardcodedIdentityReply($session),
@@ -78,15 +71,20 @@ abstract class BaseCoach implements CoachInterface
             ];
         }
 
-        // Build the full prompt with language instruction
+        // Build the base system prompt (global rules + coach identity).
         $systemPrompt = $this->buildFullSystemPrompt($session);
+
+        // Load the state-specific prompt (intake, exploration, deepening, etc.).
+        // INTAKE uses its own dedicated prompt, not a duplicate of system.
         $statePrompt = $this->getStatePrompt($session->state);
 
-        // Run CoE reasoning
+        // Run Chain of Empathy reasoning. The result is injected into the
+        // main LLM call so context-aware emotional analysis actually drives
+        // the response instead of being discarded.
         $coeResult = $this->coeEngine->reason($session, $message, $systemPrompt);
 
-        // Generate response using LLM (in user's preferred language)
-        $rawResponse = $this->generateResponse($session, $message, $systemPrompt, $statePrompt);
+        // Generate response using LLM, now with CoE analysis injected.
+        $rawResponse = $this->generateResponse($session, $message, $systemPrompt, $statePrompt, $coeResult);
 
         $prescription = null;
         $cleanResponse = $rawResponse;
@@ -110,9 +108,6 @@ abstract class BaseCoach implements CoachInterface
 
     /**
      * Build the deterministic identity reply.
-     *
-     * Coach name stays in Latin script in both languages — coach names are
-     * brand identifiers and should be consistent across languages.
      */
     protected function buildHardcodedIdentityReply(Session $session): string
     {
@@ -128,13 +123,6 @@ abstract class BaseCoach implements CoachInterface
 
     /**
      * Build the deterministic credential / human-ness reply.
-     *
-     * Disclaims any clinical credential and any humanity claim. Required by
-     * NIST-AI-RMF / NHS-DCB0129 posture: the model must not represent itself
-     * as a licensed professional or a human, even when the persona prompt
-     * has been enriched with backstory.
-     *
-     * Coach name stays in Latin script in both languages.
      */
     protected function buildHardcodedCredentialReply(Session $session): string
     {
@@ -150,16 +138,6 @@ abstract class BaseCoach implements CoachInterface
     /**
      * Build the system prompt: global rules + coach-specific content +
      * (optionally) a one-turn transition bridge.
-     *
-     * The bridge fires only on the turn immediately following an FSM
-     * state transition (detected via Session::$lastTransitionAt). It
-     * instructs the bot to acknowledge continuity from the previous
-     * coaching phase before easing into the new one — preventing the
-     * abrupt tone-shift that the bare new-state prompt would cause.
-     *
-     * Language enforcement is handled by buildLanguageRule() via
-     * getIdentityAnchor() which is appended last in generateResponse().
-     * Single source of truth.
      */
     protected function buildFullSystemPrompt(Session $session): string
     {
@@ -184,15 +162,6 @@ PROMPT;
 
     /**
      * Resolve the transition bridge for this turn (or empty string).
-     *
-     * Returns non-empty content only when:
-     * 1. A transition occurred on the previous turn (i.e. lastTransitionAt
-     *    equals the current turnCount minus 1 — the user has just sent the
-     *    first message after a state change), AND
-     * 2. The from→to pair (with optional reason qualifier) maps to a known
-     *    section in global/transitions.md.
-     *
-     * Bridges fire for ONE TURN only.
      */
     protected function buildTransitionBridge(Session $session): string
     {
@@ -200,11 +169,6 @@ PROMPT;
             return '';
         }
 
-        // Bridge fires on the FIRST turn after a transition. The transition
-        // sets lastTransitionAt to the turnCount at that moment. By the time
-        // BaseCoach runs (after addTurn(user) in SislyManager), turnCount has
-        // incremented by exactly 1 — so a current-cycle bridge is detected
-        // when lastTransitionAt === turnCount - 1.
         if ($session->lastTransitionAt !== $session->turnCount - 1) {
             return '';
         }
@@ -217,12 +181,158 @@ PROMPT;
     }
 
     /**
-     * Final identity + language anchor appended last in the system prompt.
+     * Build a compact conversation summary for longer sessions.
      *
-     * Lands after all state-specific scripts so it wins recency bias over
-     * any conflicting "include Arabic mirror" content baked into the
-     * coach prompts. Also enforces the SessionPreferences.language and
-     * arabicMirror flags, which the prompt body otherwise ignores.
+     * For sessions beyond 6 turns, prepend a running summary of the key
+     * context gathered so far (emotion, issue, body sensations, technique
+     * offered) so the LLM never loses track of what was said earlier even
+     * when the raw history window is full.
+     */
+    protected function buildConversationSummary(Session $session): string
+    {
+        $history = $session->getHistoryForLLM();
+        $turnCount = count($history);
+
+        // Only inject a summary for longer conversations (> 6 turns = 3 exchanges)
+        if ($turnCount <= 6) {
+            return '';
+        }
+
+        // Collect key signals from the full history
+        $userMessages = array_filter($history, fn($t) => $t['role'] === 'user');
+        $assistantMessages = array_filter($history, fn($t) => $t['role'] === 'assistant');
+
+        $firstUserMsg = array_values($userMessages)[0]['content'] ?? '';
+        $recentUserMessages = array_slice(array_values($userMessages), -3);
+        $recentUserText = implode(' | ', array_map(fn($m) => mb_substr($m['content'], 0, 80), $recentUserMessages));
+
+        $stateLabel = $session->state->label();
+        $coachName = $this->getName();
+        $turnPairs = (int) floor($turnCount / 2);
+
+        return <<<SUMMARY
+## Active Session Context (turn {$turnPairs} of this conversation)
+
+Coach: {$coachName} | Phase: {$stateLabel}
+
+The user opened with: "{$firstUserMsg}"
+Recent messages from user: "{$recentUserText}"
+
+You have been in active conversation for {$turnPairs} exchanges. The full conversation history follows in the messages array. Use it to:
+- Refer back to specific things the user already told you (their meeting, their fear, their body sensation)
+- Build on what you have already explored — do NOT start over
+- Advance the session toward its natural conclusion if the user has been well-heard
+- Maintain your coach-specific scope and voice throughout
+
+Do NOT re-introduce yourself. Do NOT ask questions the user already answered. Continue from where you are.
+SUMMARY;
+    }
+
+    /**
+     * Build the CoE context block to inject into the LLM system prompt.
+     *
+     * The Chain of Empathy analysis is the intelligence layer that should
+     * directly shape the response. Without injection, it is computed but
+     * completely ignored by the main LLM call — wasting both an API call
+     * and the only context-aware signal available for this turn.
+     */
+    protected function buildCoeContextBlock(CoETrace $coeTrace): string
+    {
+        $emotionLine = $coeTrace->emotionSecondary
+            ? "{$coeTrace->emotionPrimary} (secondary: {$coeTrace->emotionSecondary})"
+            : $coeTrace->emotionPrimary;
+
+        $strategyInstructions = $this->getStrategyInstructions($coeTrace->strategySelected, $coeTrace->userIntent);
+
+        return <<<COE
+## Chain of Empathy Analysis (this turn — use this to shape your response)
+
+Emotion detected: {$emotionLine}
+Cause/trigger: {$coeTrace->causeAnalysis}
+What the user needs right now: {$coeTrace->userIntent}
+Recommended strategy: {$coeTrace->strategySelected}
+
+{$strategyInstructions}
+
+Suggested response direction: "{$coeTrace->draftResponse}"
+(You may use this draft as a starting point, but adapt it to the conversation history and your coach voice.)
+COE;
+    }
+
+    /**
+     * Translate a CoE strategy into concrete, turn-specific instructions.
+     */
+    protected function getStrategyInstructions(string $strategy, string $intent): string
+    {
+        return match ($strategy) {
+            'validation' => "The user needs to feel heard first. Reflect their emotion back plainly without minimising. Do NOT offer a solution or technique yet. One sentence of acknowledgment, then one open question if needed.",
+            'exploration' => "You need more context. Ask ONE clarifying question that helps you understand either: the specific trigger, the feared outcome, or where it shows up in their body. Do not ask more than one question.",
+            'reframe' => "The user is ready for a perspective shift. Offer a gentle reframe in one sentence — something that normalises or redirects, without dismissing the feeling.",
+            'technique' => "The user is ready for a practical tool. Offer a technique matched to their time availability and presenting issue. Guide step by step. Do not explain why it works.",
+            'grounding' => "The user is escalating or dissociated. Ground them in physical present reality first: feet, hands, breath. Short, calm, directive sentences.",
+            'containment' => "The user is at capacity or out of scope. Acknowledge the weight, then gently redirect to what you CAN help with, or suggest a handoff to the appropriate coach.",
+            default => "Read the user's message carefully and respond with empathy before anything else.",
+        };
+    }
+
+    /**
+     * Build the scope enforcement block for this coach.
+     *
+     * Injects a per-turn reminder of what this coach handles and what
+     * triggers a handoff. Prevents scope drift across long conversations
+     * where the LLM's persona can gradually loosen from the coach's domain.
+     */
+    protected function buildScopeEnforcementBlock(Session $session): string
+    {
+        $name = $this->getName();
+        $inScope = $this->getInScopeDescription();
+        $outOfScope = $this->getOutOfScopeDescription();
+        $handoffInstruction = $this->getHandoffInstruction();
+
+        return <<<SCOPE
+## Scope Enforcement for {$name} (applies every turn — non-negotiable)
+
+YOU ARE {$name}. Your domain is: {$inScope}
+
+OUT OF SCOPE for {$name}: {$outOfScope}
+
+If the user's current message is about something outside your domain:
+{$handoffInstruction}
+
+Do NOT attempt to coach on out-of-scope topics. Do NOT give generic life advice, relationship advice, career advice, medical advice, or productivity tips. Stay strictly within your domain.
+
+If the user is clearly within your domain but their needs have shifted to another domain mid-conversation, acknowledge what they've shared and offer a warm handoff.
+SCOPE;
+    }
+
+    /**
+     * Return a short in-scope description for this coach.
+     * Subclasses override this for precise domain enforcement.
+     */
+    protected function getInScopeDescription(): string
+    {
+        return $this->getId()->focus();
+    }
+
+    /**
+     * Return a short out-of-scope description for this coach.
+     * Subclasses should override with coach-specific out-of-scope items.
+     */
+    protected function getOutOfScopeDescription(): string
+    {
+        return 'general life coaching, relationship advice, medical advice, career coaching, financial advice, legal advice, productivity systems';
+    }
+
+    /**
+     * Return the handoff instruction when the user is out of scope.
+     */
+    protected function getHandoffInstruction(): string
+    {
+        return "Say: \"What you're describing sounds like it's outside what I can help with directly. [Name the right coach if applicable] would be better suited for this.\" Then offer to stay present if the user wants to come back to your domain.";
+    }
+
+    /**
+     * Final identity + language anchor appended last in the system prompt.
      */
     protected function getIdentityAnchor(Session $session): string
     {
@@ -253,10 +363,6 @@ PROMPT;
 
     /**
      * Build the strict language rule from session preferences.
-     *
-     * Overrides any "include Arabic mirror" instructions in upstream
-     * prompts. Honors SessionPreferences.language (en|ar) and
-     * SessionPreferences.arabicMirror (only meaningful for en).
      */
     protected function buildLanguageRule(Session $session): string
     {
@@ -294,22 +400,44 @@ PROMPT;
 
     /**
      * Generate a response using the LLM.
+     *
+     * Now accepts CoETrace so the emotional analysis is injected into the
+     * system prompt rather than being silently discarded. Also injects:
+     * - Scope enforcement block (prevents domain drift across long sessions)
+     * - Conversation summary (prevents context loss after turn 6)
      */
     protected function generateResponse(
         Session $session,
         string $message,
         string $systemPrompt,
         string $statePrompt,
+        ?CoETrace $coeTrace = null,
     ): string {
         $messages = $session->getHistoryForLLM();
 
-        // Add state-specific context, then a final identity anchor that always lands last
-        // in the system prompt. Prevents the coaching script (which dominates the body of
-        // the prompt) from overriding meta-question handling via recency bias.
-        $fullSystemPrompt = $systemPrompt . "\n\n" . $statePrompt . "\n\n" . $this->getIdentityAnchor($session);
+        // Build the full system prompt with all context layers:
+        // 1. Base: global rules + coach identity
+        // 2. State prompt: what to do in this FSM phase (intake/exploration/etc.)
+        // 3. CoE block: emotion/intent/strategy for THIS turn (previously discarded)
+        // 4. Scope enforcement: per-turn domain boundary reminder
+        // 5. Conversation summary: prevents context loss in longer sessions
+        // 6. Identity anchor: language rule + name override (must be last)
+        $coeBlock = $coeTrace !== null ? "\n\n" . $this->buildCoeContextBlock($coeTrace) : '';
+        $scopeBlock = "\n\n" . $this->buildScopeEnforcementBlock($session);
+        $summaryBlock = $this->buildConversationSummary($session);
+        $summarySection = $summaryBlock !== '' ? "\n\n" . $summaryBlock : '';
 
-        // Determine max tokens dynamically
-        $maxTokens = 150;
+        $fullSystemPrompt = $systemPrompt
+            . "\n\n" . $statePrompt
+            . $coeBlock
+            . $scopeBlock
+            . $summarySection
+            . "\n\n" . $this->getIdentityAnchor($session);
+
+        // Max tokens: technique delivery needs more room (step-by-step instructions).
+        // Other states use 200 tokens — enough for a meaningful response while
+        // staying concise. The old 150-token cap was cutting sentences mid-thought.
+        $maxTokens = 200;
         if ($this->getConfig('sisly.prescription.enabled', true) && $session->state === SessionState::PROBLEM_SOLVING) {
             $maxTokens = $this->getConfig('sisly.prescription.max_tokens_handoff', 400);
         }
@@ -320,7 +448,6 @@ PROMPT;
         ]);
 
         if (!$response->success) {
-            // Log the error for debugging (only in Laravel context)
             if (function_exists('app') && app()->bound('log')) {
                 app('log')->error('Sisly LLM call failed', [
                     'error' => $response->error,
@@ -341,7 +468,7 @@ PROMPT;
     protected function getTemperatureForState(SessionState $state): float
     {
         return match ($state) {
-            SessionState::CRISIS_INTERVENTION => 0.0, // Deterministic for safety
+            SessionState::CRISIS_INTERVENTION => 0.0,
             SessionState::INTAKE => 0.7,
             SessionState::EXPLORATION => 0.7,
             SessionState::DEEPENING => 0.6,
@@ -363,15 +490,18 @@ PROMPT;
             SessionState::PROBLEM_SOLVING => "Let's try something together. Do you have 30 seconds, 1 minute, or 2 minutes?",
             SessionState::CLOSING => "You've done well to take this time for yourself.",
             default => "I'm here with you.",
-        };
+        ];
     }
 
     /**
      * Clean up the LLM response.
+     *
+     * Removes markdown formatting and truncates at a sentence boundary
+     * rather than a raw word count to avoid cut-off mid-sentence responses.
      */
     protected function cleanResponse(string $response): string
     {
-        // Remove any markdown formatting
+        // Remove markdown headers
         $response = preg_replace('/^#+\s*/m', '', $response) ?? $response;
 
         // Remove bullet points
@@ -380,10 +510,24 @@ PROMPT;
         // Trim whitespace
         $response = trim($response);
 
-        // Limit length (20-25 words is the guideline)
+        // Truncate at sentence boundary, not raw word count.
+        // Technique instructions (PROBLEM_SOLVING) need up to ~120 words.
+        // Other states target 20-40 words. Hard cap at 120 words.
         $words = explode(' ', $response);
-        if (count($words) > 40) {
-            $response = implode(' ', array_slice($words, 0, 40));
+        if (count($words) > 120) {
+            // Find the last sentence-ending punctuation within 120 words
+            $truncated = implode(' ', array_slice($words, 0, 120));
+            // Back off to the last sentence boundary
+            $lastPunct = max(
+                strrpos($truncated, '.'),
+                strrpos($truncated, '?'),
+                strrpos($truncated, '!'),
+            );
+            if ($lastPunct !== false && $lastPunct > strlen($truncated) * 0.5) {
+                $response = substr($truncated, 0, $lastPunct + 1);
+            } else {
+                $response = $truncated;
+            }
         }
 
         return $response;
@@ -404,17 +548,11 @@ PROMPT;
             }
         }
 
-        // Require at least one trigger match
         return $matchCount >= 1;
     }
 
     /**
      * Get a randomly selected greeting in the specified language.
-     *
-     * Picks from the pre-written greeting pairs returned by getGreetings().
-     *
-     * @param string $language The preferred language ('en' or 'ar')
-     * @return string The greeting message
      */
     public function getGreeting(string $language = 'en'): string
     {
@@ -426,8 +564,6 @@ PROMPT;
 
     /**
      * Get all available greeting pairs for this coach.
-     *
-     * Each subclass must return an array of bilingual greeting pairs.
      *
      * @return array<array{en: string, ar: string}>
      */
