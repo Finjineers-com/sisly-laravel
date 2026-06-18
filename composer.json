@@ -1,6 +1,6 @@
 {
     "name": "sisly/sisly-laravel",
-    "description": "AI emotional coaching package for Laravel with 5 specialized coaches for GCC market",
+    "description": "AI emotional coaching package for Laravel — five coaches, parallel safety classifier, content prescription handoff, GCC/Arabic support",
     "type": "library",
     "license": "proprietary",
     "keywords": [
@@ -9,7 +9,8 @@
         "coaching",
         "emotional-support",
         "mental-health",
-        "gcc"
+        "gcc",
+        "arabic"
     ],
     "authors": [
         {

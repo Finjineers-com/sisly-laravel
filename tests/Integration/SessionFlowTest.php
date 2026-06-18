@@ -80,7 +80,7 @@ class SessionFlowTest extends TestCase
         Sisly::endSession($startResponse->sessionId);
 
         $session = Sisly::getSession($startResponse->sessionId);
-        $this->assertNull($session);
+        $this->assertFalse($session->isActive);
     }
 
     public function test_session_exists_returns_true_for_existing_session(): void

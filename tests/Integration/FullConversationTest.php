@@ -114,10 +114,7 @@ class FullConversationTest extends IntegrationTestCase
             str_contains($content, 'lot') ||
             str_contains($content, 'much') ||
             str_contains($content, 'pressure') ||
-            str_contains($content, 'breath') ||
-            str_contains($content, 'cope') ||
-            str_contains($content, 'screaming') ||
-            str_contains($content, 'attention'),
+            str_contains($content, 'breath'),
             "Response should acknowledge overwhelm. Got: {$response->responseText}"
         );
 
@@ -411,7 +408,7 @@ class FullConversationTest extends IntegrationTestCase
 
         // This is a soft check - LLM responses vary
         if (!$isRelevant) {
-            fwrite(STDERR, "\n[Warning] Response may not be contextually relevant: {$response->responseText}\n");
+            $this->addWarning("Response may not be contextually relevant: {$response->responseText}");
         }
 
         Sisly::endSession($response->sessionId);

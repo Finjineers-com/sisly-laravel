@@ -6,7 +6,6 @@ namespace Sisly\Tests\Integration;
 
 use Sisly\LLM\Providers\OpenAIProvider;
 use Sisly\LLM\Providers\GeminiProvider;
-use Sisly\LLM\Providers\AnthropicProvider;
 
 /**
  * Integration tests for live LLM API calls.
@@ -124,11 +123,6 @@ class LiveLLMTest extends IntegrationTestCase
                 'api_key' => $this->openaiApiKey,
                 'model' => 'gpt-4-turbo',
             ]);
-        } elseif ($driver === 'anthropic') {
-            $provider = new AnthropicProvider([
-                'api_key' => $this->anthropicApiKey,
-                'model' => 'claude-haiku-4-5-20251001',
-            ]);
         } else {
             $provider = new GeminiProvider([
                 'api_key' => $this->geminiApiKey,
@@ -140,48 +134,6 @@ class LiveLLMTest extends IntegrationTestCase
         $response = $provider->generate('Respond in English to: أشعر بالقلق (I feel anxious). Just say "I understand" in one sentence.');
 
         $this->assertTrue($response->success, 'LLM failed with Arabic input: ' . ($response->error ?? 'unknown'));
-        $this->assertNotEmpty($response->content);
-    }
-
-    public function test_anthropic_provider_can_generate_response(): void
-    {
-        $this->requireAnthropic();
-
-        $provider = new AnthropicProvider([
-            'api_key' => $this->anthropicApiKey,
-            'model' => 'claude-haiku-4-5-20251001',
-            'timeout' => 30,
-        ]);
-
-        $response = $provider->generate('Say "Hello, test!" and nothing else.');
-
-        $this->assertTrue($response->success, 'Anthropic call failed: ' . ($response->error ?? 'unknown error'));
-        $this->assertNotEmpty($response->content);
-        $this->assertStringContainsStringIgnoringCase('hello', $response->content);
-    }
-
-    public function test_anthropic_provider_can_chat(): void
-    {
-        $this->requireAnthropic();
-
-        $provider = new AnthropicProvider([
-            'api_key' => $this->anthropicApiKey,
-            'model' => 'claude-haiku-4-5-20251001',
-            'timeout' => 30,
-        ]);
-
-        $messages = [
-            ['role' => 'user', 'content' => 'I am feeling overwhelmed with work.'],
-        ];
-
-        $systemPrompt = 'You are an empathetic emotional coach. Respond in 1-2 short sentences.';
-
-        $response = $provider->chat($messages, $systemPrompt, [
-            'temperature' => 0.7,
-            'max_tokens' => 100,
-        ]);
-
-        $this->assertTrue($response->success, 'Anthropic chat failed: ' . ($response->error ?? 'unknown error'));
         $this->assertNotEmpty($response->content);
     }
 

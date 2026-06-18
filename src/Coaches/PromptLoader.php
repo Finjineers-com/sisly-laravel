@@ -201,22 +201,11 @@ class PromptLoader
 
     /**
      * Map SessionState to prompt file name.
-     *
-     * INTAKE maps to 'intake' — a dedicated first-message prompt that gives
-     * distinct, state-appropriate instructions rather than duplicating the
-     * system prompt. Each coach has its own intake.md under
-     * resources/prompts/coaches/{coach}/intake.md.
-     *
-     * Previously INTAKE mapped to 'system', which caused the system prompt to
-     * be concatenated with itself in generateResponse() (systemPrompt +
-     * statePrompt both resolved to system.md). The doubled identical context
-     * gave the LLM no turn-specific guidance, producing the same generic
-     * reply for every first message regardless of what the user said.
      */
     private function mapStateToPromptName(SessionState $state): string
     {
         return match ($state) {
-            SessionState::INTAKE => 'intake',
+            SessionState::INTAKE => 'system', // Use system prompt for intake
             SessionState::EXPLORATION => 'exploration',
             SessionState::DEEPENING => 'deepening',
             SessionState::PROBLEM_SOLVING => 'technique',

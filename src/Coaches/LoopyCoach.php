@@ -99,21 +99,6 @@ class LoopyCoach extends BaseCoach
         };
     }
 
-    protected function getInScopeDescription(): string
-    {
-        return 'rumination, thought loops, overthinking, replaying past events obsessively, "what if" catastrophising spirals, intrusive thoughts, mental exhaustion from an overactive mind, being stuck in your head';
-    }
-
-    protected function getOutOfScopeDescription(): string
-    {
-        return 'immediate pre-meeting anxiety (→ MEETLY), anger or frustration that needs discharge (→ VENTO), workload/deadline pressure (→ PRESSO), self-worth or imposter syndrome (→ BOOSTLY), big life decisions under uncertainty (→ SAFEO), relationship advice, medical advice, career coaching';
-    }
-
-    protected function getHandoffInstruction(): string
-    {
-        return "Acknowledge the thought pattern first, then say: \"What's underneath this loop sounds more like [domain]. Would you like to talk to [COACH NAME] about that? I'm here for the thought-loop piece whenever you're ready.\"";
-    }
-
     /**
      * Get the system prompt for a specific state.
      */

@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Sisly;
 
 use Illuminate\Support\ServiceProvider;
+use Sisly\Arabic\LanguageDetector;
 use Sisly\Coaches\CoachRegistry;
 use Sisly\Coaches\PromptLoader;
+use Sisly\Contracts\AssetResolverInterface;
 use Sisly\Contracts\LLMProviderInterface;
 use Sisly\Contracts\SessionStoreInterface;
 use Sisly\Dispatcher\Dispatcher;
@@ -21,15 +23,11 @@ use Sisly\Safety\CrisisDetector;
 use Sisly\Safety\CrisisHandler;
 use Sisly\Safety\CrisisResourceProvider;
 use Sisly\Safety\PostResponseValidator;
+use Sisly\Safety\SafetyClassifier;
 use Sisly\Session\Adapters\LaravelCacheAdapter;
-use Sisly\Coaches\PrescriptionParser;
-use Sisly\Prescription\PrescriptionResolver;
 
 class SislyServiceProvider extends ServiceProvider
 {
-    /**
-     * Register any application services.
-     */
     public function register(): void
     {
         $this->mergeConfigFrom(
@@ -37,25 +35,22 @@ class SislyServiceProvider extends ServiceProvider
             'sisly'
         );
 
-        // Register session store
         $this->registerSessionStore();
-
-        // Register safety components
         $this->registerSafetyComponents();
-
-        // Register FSM and Dispatcher
         $this->registerFSMComponents();
 
-        // Register prescription components
-        $this->app->singleton(PrescriptionParser::class, function ($app) {
-            return new PrescriptionParser();
+        // Register asset resolver if configured
+        $this->app->singleton(AssetResolverInterface::class, function ($app) {
+            $resolverClass = $app['config']->get('sisly.prescription.asset_resolver');
+
+            if ($resolverClass !== null && class_exists($resolverClass)) {
+                return $app->make($resolverClass);
+            }
+
+            return null;
         });
 
-        $this->app->singleton(PrescriptionResolver::class, function ($app) {
-            return new PrescriptionResolver();
-        });
-
-        // Register main manager
+        // Main manager
         $this->app->singleton(SislyManager::class, function ($app) {
             return new SislyManager(
                 config: $app['config']->get('sisly'),
@@ -67,16 +62,15 @@ class SislyServiceProvider extends ServiceProvider
                 dispatcher: $app->make(Dispatcher::class),
                 handoffDetector: $app->make(HandoffDetector::class),
                 coachRegistry: $app->make(CoachRegistry::class),
-                prescriptionResolver: $app->make(PrescriptionResolver::class),
+                safetyClassifier: $app->make(SafetyClassifier::class),
+                languageDetector: $app->make(LanguageDetector::class),
+                assetResolver: $app->make(AssetResolverInterface::class),
             );
         });
 
         $this->app->alias(SislyManager::class, 'sisly');
     }
 
-    /**
-     * Bootstrap any application services.
-     */
     public function boot(): void
     {
         if ($this->app->runningInConsole()) {
@@ -94,9 +88,6 @@ class SislyServiceProvider extends ServiceProvider
         }
     }
 
-    /**
-     * Register the session store based on config.
-     */
     protected function registerSessionStore(): void
     {
         $this->app->singleton(SessionStoreInterface::class, function ($app) {
@@ -105,18 +96,14 @@ class SislyServiceProvider extends ServiceProvider
 
             return match ($driver) {
                 'cache' => new LaravelCacheAdapter($config),
-                'redis' => new Session\Adapters\RedisAdapter($config),
+                'redis' => new \Sisly\Session\Adapters\RedisAdapter($config),
                 default => new LaravelCacheAdapter($config),
             };
         });
     }
 
-    /**
-     * Register safety layer components.
-     */
     protected function registerSafetyComponents(): void
     {
-        // Crisis Detector
         $this->app->singleton(CrisisDetector::class, function ($app) {
             $customPath = $app['config']->get('sisly.safety.crisis_lexicon_path');
 
@@ -128,10 +115,9 @@ class SislyServiceProvider extends ServiceProvider
             return new CrisisDetector();
         });
 
-        // Crisis Resource Provider
         $this->app->singleton(CrisisResourceProvider::class, function ($app) {
             $useDefaults = $app['config']->get('sisly.crisis_resources.use_package_defaults', true);
-            $customPath = $app['config']->get('sisly.crisis_resources.custom_path');
+            $customPath  = $app['config']->get('sisly.crisis_resources.custom_path');
 
             if (!$useDefaults && $customPath !== null && file_exists($customPath)) {
                 $resources = json_decode(file_get_contents($customPath), true);
@@ -141,65 +127,76 @@ class SislyServiceProvider extends ServiceProvider
             return new CrisisResourceProvider();
         });
 
-        // Crisis Handler
         $this->app->singleton(CrisisHandler::class, function ($app) {
             return new CrisisHandler(
                 resourceProvider: $app->make(CrisisResourceProvider::class),
             );
         });
 
-        // Post Response Validator
         $this->app->singleton(PostResponseValidator::class, function ($app) {
             return new PostResponseValidator();
         });
+
+        // Safety classifier uses the cheaper/faster "safety_model" tier
+        $this->app->singleton(SafetyClassifier::class, function ($app) {
+            $parallelEnabled = $app['config']->get('sisly.safety_classifier.parallel_enabled', true);
+
+            if (!$parallelEnabled) {
+                // Return a no-op classifier that always returns "ok"
+                return new class extends SafetyClassifier {
+                    public function __construct() {
+                        // no-op constructor (testing only)
+                    }
+                    public function classify(string $userMessage): \Sisly\DTOs\SafetyVerdict {
+                        return \Sisly\DTOs\SafetyVerdict::ok();
+                    }
+                };
+            }
+
+            $driver = $app['config']->get('sisly.llm.driver', 'anthropic');
+            $failClosed = $app['config']->get(
+                'sisly.safety_classifier.fail_closed_verdict',
+                \Sisly\DTOs\SafetyVerdict::VERDICT_CHECKING
+            );
+
+            // Use the dedicated safety_model (cheaper tier)
+            $safetyProvider = $this->createSafetyProvider($driver, $app);
+
+            return new SafetyClassifier($safetyProvider, $failClosed);
+        });
     }
 
-    /**
-     * Register FSM and Dispatcher components.
-     */
     protected function registerFSMComponents(): void
     {
-        // State Machine
         $this->app->singleton(StateMachine::class, function ($app) {
-            return new StateMachine(
-                $app['config']->get('sisly.fsm', [])
-            );
+            return new StateMachine($app['config']->get('sisly.fsm', []));
         });
 
-        // LLM Provider with failover support
+        // Primary LLM provider (coach model tier)
         $this->app->singleton(LLMProviderInterface::class, function ($app) {
-            $driver = $app['config']->get('sisly.llm.driver', 'openai');
+            $driver         = $app['config']->get('sisly.llm.driver', 'anthropic');
             $failoverEnabled = $app['config']->get('sisly.llm.failover_enabled', true);
 
-            // For mock driver, return MockProvider directly
             if ($driver === 'mock') {
                 return new MockProvider();
             }
 
-            // Create the primary provider
             $primaryProvider = $this->createLLMProvider($driver, $app);
 
-            // If failover is disabled, return primary provider directly
             if (!$failoverEnabled) {
                 return $primaryProvider;
             }
 
-            // Create LLM Manager with failover
             $failureThreshold = $app['config']->get('sisly.llm.failure_threshold', 5);
             $manager = new LLMManager([], true, $failureThreshold);
-
-            // Add primary provider
             $manager->addProvider($primaryProvider);
 
-            // Add fallbacks (add all other available providers to manager)
-            $fallbackDrivers = [];
-            if ($driver === 'openai') {
-                $fallbackDrivers = ['gemini', 'anthropic'];
-            } elseif ($driver === 'gemini') {
-                $fallbackDrivers = ['openai', 'anthropic'];
-            } elseif ($driver === 'anthropic') {
-                $fallbackDrivers = ['openai', 'gemini'];
-            }
+            $fallbackDrivers = match ($driver) {
+                'openai'    => ['anthropic', 'gemini'],
+                'gemini'    => ['anthropic', 'openai'],
+                'anthropic' => ['openai', 'gemini'],
+                default     => [],
+            };
 
             foreach ($fallbackDrivers as $fallbackDriver) {
                 $fallbackProvider = $this->createLLMProvider($fallbackDriver, $app);
@@ -211,26 +208,19 @@ class SislyServiceProvider extends ServiceProvider
             return $manager;
         });
 
-        // Register individual providers for direct access
-        $this->app->singleton(OpenAIProvider::class, function ($app) {
-            return $this->createLLMProvider('openai', $app);
+        $this->app->singleton(OpenAIProvider::class, fn ($app) => $this->createLLMProvider('openai', $app));
+        $this->app->singleton(GeminiProvider::class, fn ($app) => $this->createLLMProvider('gemini', $app));
+        $this->app->singleton(AnthropicProvider::class, fn ($app) => $this->createLLMProvider('anthropic', $app));
+
+        $this->app->singleton(LanguageDetector::class, function ($app) {
+            return new LanguageDetector();
         });
 
-        $this->app->singleton(GeminiProvider::class, function ($app) {
-            return $this->createLLMProvider('gemini', $app);
-        });
-
-        $this->app->singleton(AnthropicProvider::class, function ($app) {
-            return $this->createLLMProvider('anthropic', $app);
-        });
-
-        // Prompt Loader
         $this->app->singleton(PromptLoader::class, function ($app) {
             $overridePath = $app['config']->get('sisly.prompts.override_path');
             return new PromptLoader($overridePath);
         });
 
-        // Coach Registry
         $this->app->singleton(CoachRegistry::class, function ($app) {
             return new CoachRegistry(
                 llm: $app->make(LLMProviderInterface::class),
@@ -239,44 +229,86 @@ class SislyServiceProvider extends ServiceProvider
             );
         });
 
-        // Dispatcher
         $this->app->singleton(Dispatcher::class, function ($app) {
+            $useSafetyModel = $app['config']->get('sisly.dispatcher.use_safety_model', true);
+
+            // Dispatcher uses the cheaper model for classification
+            $driver = $app['config']->get('sisly.llm.driver', 'anthropic');
+            $llm = $useSafetyModel
+                ? $this->createSafetyProvider($driver, $app)
+                : $app->make(LLMProviderInterface::class);
+
             return new Dispatcher(
-                llm: $app->make(LLMProviderInterface::class),
+                llm: $llm,
                 config: [
-                    'enabled_coaches' => $app['config']->get('sisly.coaches.enabled'),
-                    'default_coach' => $app['config']->get('sisly.coaches.default', 'meetly'),
+                    'enabled_coaches'       => $app['config']->get('sisly.coaches.enabled'),
+                    'default_coach'         => $app['config']->get('sisly.coaches.default', 'meetly'),
+                    'confidence_threshold'  => $app['config']->get('sisly.dispatcher.confidence_threshold', 0.7),
+                    'prompt'                => $this->loadDispatcherPrompt($app),
                 ],
             );
         });
 
-        // Handoff Detector
         $this->app->singleton(HandoffDetector::class, function ($app) {
             return new HandoffDetector();
         });
     }
 
     /**
-     * Create an LLM provider instance.
-     *
-     * @param \Illuminate\Foundation\Application $app
+     * Create an LLM provider using the COACH model tier (full quality).
      */
     protected function createLLMProvider(string $driver, $app): LLMProviderInterface
     {
         return match ($driver) {
-            'openai' => new OpenAIProvider($app['config']->get('sisly.llm.openai', [])),
-            'gemini' => new GeminiProvider($app['config']->get('sisly.llm.gemini', [])),
+            'openai'    => new OpenAIProvider($app['config']->get('sisly.llm.openai', [])),
+            'gemini'    => new GeminiProvider($app['config']->get('sisly.llm.gemini', [])),
             'anthropic' => new AnthropicProvider($app['config']->get('sisly.llm.anthropic', [])),
-            'mock' => new MockProvider(),
-            default => new MockProvider(),
+            'mock'      => new MockProvider(),
+            default     => new MockProvider(),
         };
     }
 
     /**
-     * Get the services provided by the provider.
+     * Create an LLM provider using the SAFETY model tier (cheap + fast).
      *
-     * @return array<string>
+     * Each provider config has a dedicated safety_model field.
+     * Falls back to the standard model if safety_model is not set.
      */
+    protected function createSafetyProvider(string $driver, $app): LLMProviderInterface
+    {
+        $config = $app['config']->get("sisly.llm.{$driver}", []);
+
+        // Swap model to the cheaper safety_model tier
+        if (isset($config['safety_model'])) {
+            $config['model'] = $config['safety_model'];
+        }
+
+        return match ($driver) {
+            'openai'    => new OpenAIProvider($config),
+            'gemini'    => new GeminiProvider($config),
+            'anthropic' => new AnthropicProvider($config),
+            'mock'      => new MockProvider(),
+            default     => new MockProvider(),
+        };
+    }
+
+    /**
+     * Load the dispatcher prompt from resources/prompts/global/dispatcher.md.
+     */
+    private function loadDispatcherPrompt($app): ?string
+    {
+        $overridePath = $app['config']->get('sisly.prompts.override_path');
+        $promptPath   = $overridePath
+            ? $overridePath . '/global/dispatcher.md'
+            : __DIR__ . '/../resources/prompts/global/dispatcher.md';
+
+        if (file_exists($promptPath)) {
+            return file_get_contents($promptPath) ?: null;
+        }
+
+        return null;
+    }
+
     public function provides(): array
     {
         return [
@@ -297,8 +329,8 @@ class SislyServiceProvider extends ServiceProvider
             CoachRegistry::class,
             Dispatcher::class,
             HandoffDetector::class,
-            PrescriptionParser::class,
-            PrescriptionResolver::class,
+            SafetyClassifier::class,
+            LanguageDetector::class,
         ];
     }
 }

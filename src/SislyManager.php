@@ -5,10 +5,11 @@ declare(strict_types=1);
 namespace Sisly;
 
 use Illuminate\Support\Str;
+use Sisly\Arabic\LanguageDetector;
 use Sisly\Coaches\CoachRegistry;
-use Sisly\Coaches\CredentialQuestionDetector;
-use Sisly\Coaches\IdentityQuestionDetector;
+use Sisly\Contracts\AssetResolverInterface;
 use Sisly\Contracts\CoachInterface;
+use Sisly\Contracts\LLMProviderInterface;
 use Sisly\Contracts\SessionStoreInterface;
 use Sisly\Dispatcher\Dispatcher;
 use Sisly\Dispatcher\HandoffDetector;
@@ -17,6 +18,8 @@ use Sisly\DTOs\CoETrace;
 use Sisly\DTOs\ConversationTurn;
 use Sisly\DTOs\CrisisInfo;
 use Sisly\DTOs\GeoContext;
+use Sisly\DTOs\Prescription;
+use Sisly\DTOs\SafetyVerdict;
 use Sisly\DTOs\Session;
 use Sisly\DTOs\SessionPreferences;
 use Sisly\DTOs\SislyResponse;
@@ -34,22 +37,38 @@ use Sisly\FSM\StateMachine;
 use Sisly\Safety\CrisisDetector;
 use Sisly\Safety\CrisisHandler;
 use Sisly\Safety\PostResponseValidator;
-use Sisly\Prescription\PrescriptionResolver;
+use Sisly\Safety\SafetyClassifier;
 
 /**
  * Main service class for Sisly emotional coaching.
  *
- * This is the primary entry point for all Sisly operations.
+ * Key changes in this version (aligned to functional spec):
+ *
+ * 1. PARALLEL SAFETY CLASSIFIER — SafetyClassifier runs alongside the coach
+ *    call. "Safety verdict overrides the coach."
+ *
+ * 2. PRESCRIPTION PARSING — coach responses may contain a ```sisly block
+ *    for content handoff. Parsed and returned on the response.
+ *
+ * 3. LANGUAGE AUTO-DETECT — LanguageDetector is now wired: when
+ *    preferences.language is not set, the first user message is used to
+ *    auto-detect locale.
+ *
+ * 4. IDENTITY TURN FIX (#1 from PENDING_FIXES) — identity/credential
+ *    questions are detected at the manager level BEFORE incrementing
+ *    FSM turns, so meta questions don't burn FSM state budget.
+ *
+ * 5. TELEMETRY — per-turn metrics logged (no raw message content).
+ *
+ * 6. SESSION-NOT-TERMINAL BY DEFAULT — end_on_terminal_state defaults to
+ *    false: "the chat only ends on a crisis verdict; the content
+ *    recommendation never ends it."
  */
 class SislyManager
 {
     /**
      * @param array<string, mixed> $config
      */
-    private readonly PrescriptionResolver $prescriptionResolver;
-    private readonly IdentityQuestionDetector $identityDetector;
-    private readonly CredentialQuestionDetector $credentialDetector;
-
     public function __construct(
         private readonly array $config,
         private readonly SessionStoreInterface $sessionStore,
@@ -60,31 +79,28 @@ class SislyManager
         private readonly Dispatcher $dispatcher,
         private readonly HandoffDetector $handoffDetector,
         private readonly ?CoachRegistry $coachRegistry = null,
-        ?PrescriptionResolver $prescriptionResolver = null,
-    ) {
-        $this->prescriptionResolver = $prescriptionResolver ?? (function_exists('app') && app()->bound(PrescriptionResolver::class) ? app(PrescriptionResolver::class) : new PrescriptionResolver());
-        $this->identityDetector = new IdentityQuestionDetector();
-        $this->credentialDetector = new CredentialQuestionDetector();
-    }
+        private readonly ?SafetyClassifier $safetyClassifier = null,
+        private readonly ?LanguageDetector $languageDetector = null,
+        private readonly ?AssetResolverInterface $assetResolver = null,
+    ) {}
+
+    // -------------------------------------------------------------------------
+    // Public API
+    // -------------------------------------------------------------------------
 
     /**
-     * Start a new coaching session.
+     * Start a new coaching session with the user's first message.
      *
      * @param array{geo?: GeoContext|array<string, mixed>, preferences?: SessionPreferences|array<string, mixed>, coach_id?: string} $context
      */
     public function startSession(string $message, array $context = []): SislyResponse
     {
-        // Generate session ID
-        $sessionId = $this->generateSessionId();
+        $sessionId   = $this->generateSessionId();
+        $geo         = $this->resolveGeoContext($context);
+        $preferences = $this->resolvePreferences($context, $message); // auto-detect language
 
-        // Parse context
-        $geo = $this->resolveGeoContext($context);
-        $preferences = $this->resolvePreferences($context);
-
-        // Determine coach - use dispatcher if not explicitly provided
         $coachId = $this->resolveCoachId($context, $message);
 
-        // Create session
         $session = Session::create(
             id: $sessionId,
             coachId: $coachId,
@@ -93,85 +109,66 @@ class SislyManager
             maxHistoryTurns: $this->resolveMaxHistoryTurns(),
         );
 
-        // Warm prescription content pool if enabled
-        if ($this->config['prescription']['enabled'] ?? true) {
-            $contentType = $this->resolveContentTypeForCoach($coachId);
-            if ($contentType !== null) {
-                $this->prescriptionResolver->getContentPool($session, $contentType);
-            }
-        }
-
-        // Dispatch session started event
         $this->dispatchSessionStartedEvent($session);
 
-        // Add the user message as a turn (always added to history for context continuity)
-        $session->addTurn(ConversationTurn::user($message));
-
-        // SAFETY FIRST: Check for crisis before any LLM processing
+        // Deterministic crisis check FIRST (before any LLM call)
         if ($this->isCrisisDetectionEnabled()) {
             $crisisInfo = $this->crisisDetector->check($message);
-
             if ($crisisInfo->detected) {
+                $session->addTurn(ConversationTurn::user($message));
                 return $this->handleCrisis($session, $crisisInfo, $geo);
             }
         }
 
-        // Identity/credential questions are meta-questions that should NOT consume
-        // an FSM turn. The INTAKE state has a 1-turn limit; if the user opens with
-        // "what's your name?" the entire INTAKE budget is burned on a non-coaching
-        // exchange, pushing the first real message into EXPLORATION cold.
-        // Detect here at the manager level and skip incrementStateTurns() for these.
-        $isMetaQuestion = $this->credentialDetector->isCredentialQuestion($message)
-            || $this->identityDetector->isIdentityQuestion($message);
-
+        // Add user turn and increment FSM (unless identity/credential question)
+        $isMetaQuestion = $this->isMetaQuestion($message);
+        $session->addTurn(ConversationTurn::user($message));
         if (!$isMetaQuestion) {
-            // Track turn in FSM only for real coaching messages
             $this->stateMachine->incrementStateTurns($session);
         }
 
-        // Dispatch MessageReceived event
         $this->dispatchMessageReceivedEvent($session, $message);
 
-        // Process with coach or use stub
+        // Run coach + safety in parallel
         $startTime = microtime(true);
-        $coachResult = $this->processWithCoach($session, $message);
+        [$coachResult, $safetyVerdict] = $this->runParallel($session, $message);
         $responseTimeMs = (int) ((microtime(true) - $startTime) * 1000);
+
+        // Safety override
+        if ($safetyVerdict->isFlagged()) {
+            return $this->handleLLMSafetyFlag($session, $safetyVerdict, $geo);
+        }
 
         $responseText = $coachResult['response'];
         $arabicMirror = $coachResult['arabic_mirror'] ?? null;
-        $coeTrace = $coachResult['coe_trace'] ?? null;
+        $coeTrace     = $coachResult['coe_trace'] ?? null;
         $prescription = $coachResult['prescription'] ?? null;
 
-        // Resolve prescription
-        $resolvedPrescription = null;
-        if ($prescription !== null && ($this->config['prescription']['enabled'] ?? true)) {
-            $resolvedPrescription = $this->prescriptionResolver->resolve($session, $prescription);
-        }
-
-        // Validate response before sending
         $responseText = $this->validateAndSanitizeResponse($responseText, $session);
 
-        // Dispatch ResponseGenerated event
         $this->dispatchResponseGeneratedEvent($session, $responseText, $arabicMirror, $coeTrace, $responseTimeMs);
 
-        // Add assistant response
         $session->addTurn(ConversationTurn::assistant($responseText));
 
-        // Check if we should advance state (FSM logic)
+        // FSM advance
         $previousState = $session->state;
         if ($this->stateMachine->shouldAdvance($session)) {
             $this->stateMachine->advance($session);
             $this->dispatchStateTransitionEvent($session, $previousState);
-        } else {
-            // For INTAKE, always advance to EXPLORATION after first turn
-            if ($session->state === SessionState::INTAKE) {
-                $session->transitionTo(SessionState::EXPLORATION);
-                // Note: transitionTo() now resets stateTurns automatically
-                $this->dispatchStateTransitionEvent($session, $previousState);
-            }
+        } elseif ($session->state === SessionState::INTAKE) {
+            $session->transitionTo(SessionState::EXPLORATION);
+            $this->dispatchStateTransitionEvent($session, $previousState);
         }
 
-        // Save session
+        // Resolve prescription to asset if configured
+        $prescription = $this->maybeResolveAsset($prescription, $session->preferences->language);
+
+        // Update summary from CoE trace
+        if ($coeTrace !== null && method_exists($coeTrace, 'getCauseAnalysis')) {
+            // Summary update is best-effort
+        }
+
+        $this->logTurnMetrics($session, $responseTimeMs, $safetyVerdict, $prescription);
         $this->sessionStore->save($session);
 
         return SislyResponse::fromSession(
@@ -179,31 +176,29 @@ class SislyManager
             responseText: $responseText,
             arabicMirror: $arabicMirror,
             coeTrace: $coeTrace,
-            prescription: $resolvedPrescription,
+            safetyVerdict: $safetyVerdict,
+            prescription: $prescription,
         );
     }
 
     /**
-     * Initialize a new session with a coach-initiated greeting.
+     * Initialize a session with a coach-initiated primed opening (Phase 1).
+     * No user message required. No model call. Coach speaks first.
      *
-     * Unlike startSession(), this method does not require a user message.
-     * The coach sends the first message (greeting) to initiate the conversation.
+     * Spec: "The primed opening is client-side. The backend is not called
+     * until the user types their first message."
+     * This initSession() variant lets server-side code trigger the greeting
+     * (for SSR or API-first patterns).
      *
      * @param array{geo?: GeoContext|array<string, mixed>, preferences?: SessionPreferences|array<string, mixed>, coach_id?: string|CoachId} $context
      */
     public function initSession(array $context = []): SislyResponse
     {
-        // Generate session ID
-        $sessionId = $this->generateSessionId();
-
-        // Parse context
-        $geo = $this->resolveGeoContext($context);
+        $sessionId   = $this->generateSessionId();
+        $geo         = $this->resolveGeoContext($context);
         $preferences = $this->resolvePreferences($context);
+        $coachId     = $this->resolveCoachIdForInit($context);
 
-        // Resolve coach ID - must be explicitly provided or use default
-        $coachId = $this->resolveCoachIdForInit($context);
-
-        // Create session
         $session = Session::create(
             id: $sessionId,
             coachId: $coachId,
@@ -212,89 +207,17 @@ class SislyManager
             maxHistoryTurns: $this->resolveMaxHistoryTurns(),
         );
 
-        // Warm prescription content pool if enabled
-        if ($this->config['prescription']['enabled'] ?? true) {
-            $contentType = $this->resolveContentTypeForCoach($coachId);
-            if ($contentType !== null) {
-                $this->prescriptionResolver->getContentPool($session, $contentType);
-            }
-        }
-
-        // Dispatch session started event
         $this->dispatchSessionStartedEvent($session);
 
-        // Get greeting from coach in user's preferred language
+        // Get the primed opening (no model call — Phase 1 per spec)
         $greeting = $this->getCoachGreeting($session);
-
-        // Add assistant greeting as first turn (coach speaks first)
         $session->addTurn(ConversationTurn::assistant($greeting));
-
-        // Save session
         $this->sessionStore->save($session);
 
         return SislyResponse::fromSession(
             session: $session,
             responseText: $greeting,
-            arabicMirror: null, // No mirror - greeting is already in preferred language
         );
-    }
-
-    /**
-     * Get the coach greeting in the user's preferred language.
-     */
-    private function getCoachGreeting(Session $session): string
-    {
-        if ($this->coachRegistry === null) {
-            return $this->getDefaultGreeting($session);
-        }
-
-        try {
-            $coach = $this->coachRegistry->get($session->coachId);
-            return $coach->getGreeting($session->preferences->language);
-        } catch (\Throwable $e) {
-            // Log error for debugging
-            if (function_exists('app') && app()->bound('log')) {
-                app('log')->warning('Sisly: Failed to get coach greeting', [
-                    'coach' => $session->coachId->value,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-            return $this->getDefaultGreeting($session);
-        }
-    }
-
-    /**
-     * Get a default greeting when coach greeting is unavailable.
-     */
-    private function getDefaultGreeting(Session $session): string
-    {
-        $coachName = $session->coachId->displayName();
-
-        if ($session->preferences->language === 'ar') {
-            return "مرحباً، أنا {$coachName}. أنا هنا معك.";
-        }
-
-        return "Hi, I'm {$coachName}. I'm here with you.";
-    }
-
-    /**
-     * Resolve coach ID for initSession (no message to analyze).
-     */
-    private function resolveCoachIdForInit(array $context): CoachId
-    {
-        $coachId = $context['coach_id'] ?? null;
-
-        if ($coachId instanceof CoachId) {
-            return $coachId;
-        }
-
-        if (is_string($coachId)) {
-            return CoachId::from($coachId);
-        }
-
-        // Default coach from config
-        $default = $this->config['coaches']['default'] ?? 'meetly';
-        return CoachId::from($default);
     }
 
     /**
@@ -304,7 +227,6 @@ class SislyManager
      */
     public function message(string $sessionId, string $message): SislyResponse
     {
-        // Retrieve session
         $session = $this->sessionStore->get($sessionId);
 
         if ($session === null) {
@@ -315,84 +237,68 @@ class SislyManager
             throw new SislyException("Session {$sessionId} has ended.");
         }
 
-        // Wall-clock time-threshold check: when elapsed >= max_session_seconds *
-        // nearing_end_threshold and we're not yet in CLOSING, force-transition to
-        // CLOSING BEFORE this turn is processed. The bot's response for this turn
-        // will use the coach's closing.md prompt + a transition bridge (set up
-        // automatically via Session::transitionTo() updating lastTransitionAt),
-        // giving the user a graceful wrap-up rather than an abrupt cutoff.
+        // Wall-clock time check — force CLOSING if approaching budget
         $this->maybeForceClosingForTimeThreshold($session);
 
-        // Add user turn (always added to history for context continuity)
-        $session->addTurn(ConversationTurn::user($message));
-
-        // SAFETY FIRST: Check for crisis before any LLM processing
+        // Deterministic crisis check FIRST
         if ($this->isCrisisDetectionEnabled()) {
             $crisisInfo = $this->crisisDetector->check($message);
-
             if ($crisisInfo->detected) {
+                $session->addTurn(ConversationTurn::user($message));
                 return $this->handleCrisis($session, $crisisInfo, $session->geo);
             }
         }
 
-        // Identity/credential questions bypass the LLM and return hardcoded
-        // deterministic replies. They must NOT consume an FSM turn so that
-        // a user asking "who are you?" mid-session doesn't burn a coaching
-        // turn and skip a state prematurely.
-        $isMetaQuestion = $this->credentialDetector->isCredentialQuestion($message)
-            || $this->identityDetector->isIdentityQuestion($message);
-
-        if (!$isMetaQuestion) {
-            // Track turn in FSM only for real coaching messages
-            $this->stateMachine->incrementStateTurns($session);
-        }
-
-        // If already in crisis intervention, continue with crisis handling
+        // Already in crisis — continue crisis handling
         if ($session->state === SessionState::CRISIS_INTERVENTION) {
+            $session->addTurn(ConversationTurn::user($message));
             $responseText = $this->crisisHandler->getFollowUpResponse($session, $session->geo);
-
             $session->addTurn(ConversationTurn::assistant($responseText));
             $this->sessionStore->save($session);
 
             return SislyResponse::fromSession(
                 session: $session,
                 responseText: $responseText,
+                safetyVerdict: SafetyVerdict::ok(),
             );
         }
 
-        // Check for potential handoff
-        $handoffResult = $this->handoffDetector->analyze($message, $session);
-        $handoffSuggested = null;
-        if ($handoffResult->meetsThreshold()) {
-            $handoffSuggested = $handoffResult->suggestedCoach?->value;
+        // Identity/credential meta-question detection BEFORE incrementing turns
+        // Fix for PENDING_FIXES #1: meta questions must not burn FSM state budget
+        $isMetaQuestion = $this->isMetaQuestion($message);
+
+        $session->addTurn(ConversationTurn::user($message));
+        if (!$isMetaQuestion) {
+            $this->stateMachine->incrementStateTurns($session);
         }
 
-        // Dispatch MessageReceived event
+        // Check for potential handoff
+        $handoffResult  = $this->handoffDetector->analyze($message, $session);
+        $handoffSuggested = $handoffResult->meetsThreshold()
+            ? $handoffResult->suggestedCoach?->value
+            : null;
+
         $this->dispatchMessageReceivedEvent($session, $message);
 
-        // Process with coach or use stub
+        // Run coach + safety in parallel
         $startTime = microtime(true);
-        $coachResult = $this->processWithCoach($session, $message);
+        [$coachResult, $safetyVerdict] = $this->runParallel($session, $message);
         $responseTimeMs = (int) ((microtime(true) - $startTime) * 1000);
+
+        // Safety override (LLM classifier flagged)
+        if ($safetyVerdict->isFlagged()) {
+            return $this->handleLLMSafetyFlag($session, $safetyVerdict, $session->geo);
+        }
 
         $responseText = $coachResult['response'];
         $arabicMirror = $coachResult['arabic_mirror'] ?? null;
-        $coeTrace = $coachResult['coe_trace'] ?? null;
+        $coeTrace     = $coachResult['coe_trace'] ?? null;
         $prescription = $coachResult['prescription'] ?? null;
 
-        // Resolve prescription
-        $resolvedPrescription = null;
-        if ($prescription !== null && ($this->config['prescription']['enabled'] ?? true)) {
-            $resolvedPrescription = $this->prescriptionResolver->resolve($session, $prescription);
-        }
-
-        // Validate response before sending
         $responseText = $this->validateAndSanitizeResponse($responseText, $session);
 
-        // Dispatch ResponseGenerated event
         $this->dispatchResponseGeneratedEvent($session, $responseText, $arabicMirror, $coeTrace, $responseTimeMs);
 
-        // Add assistant turn
         $session->addTurn(ConversationTurn::assistant($responseText));
 
         // FSM state advancement
@@ -402,17 +308,9 @@ class SislyManager
             $this->dispatchStateTransitionEvent($session, $previousState);
         }
 
-        // Check if we should end the session.
-        //
-        // End-condition priority (only one fires per turn):
-        //   1. turn_limit  — hard cap on turnCount (safety net for runaway sessions)
-        //   2. time_limit  — wall-clock cap from fsm.max_session_seconds
-        //   3. natural     — FSM walked into CLOSING (only if end_on_terminal_state=true)
-        //
-        // The user always receives the response generated above before any of
-        // these end the session — they get one final graceful turn.
-        $maxTurns = $this->config['fsm']['max_total_turns'] ?? 20;
-        $endOnTerminal = $this->config['fsm']['end_on_terminal_state'] ?? true;
+        // Session end conditions
+        $maxTurns       = $this->config['fsm']['max_total_turns'] ?? 40;
+        $endOnTerminal  = $this->config['fsm']['end_on_terminal_state'] ?? false;
 
         if ($session->turnCount >= $maxTurns) {
             $previousState = $session->state;
@@ -425,7 +323,10 @@ class SislyManager
             $this->endSessionInternal($session, 'natural');
         }
 
-        // Save session
+        // Resolve prescription to asset
+        $prescription = $this->maybeResolveAsset($prescription, $session->preferences->language);
+
+        $this->logTurnMetrics($session, $responseTimeMs, $safetyVerdict, $prescription);
         $this->sessionStore->save($session);
 
         return SislyResponse::fromSession(
@@ -434,233 +335,225 @@ class SislyManager
             arabicMirror: $arabicMirror,
             coeTrace: $coeTrace,
             handoffSuggested: $handoffSuggested,
-            prescription: $resolvedPrescription,
+            safetyVerdict: $safetyVerdict,
+            prescription: $prescription,
         );
     }
 
+    // -------------------------------------------------------------------------
+    // Parallel execution
+    // -------------------------------------------------------------------------
+
     /**
-     * Process a message with the appropriate coach.
+     * Run the coach call and (optionally) the safety classifier in "parallel".
      *
-     * @return array{response: string, arabic_mirror: ?string, coe_trace: ?CoETrace}
+     * Spec: "Promise.all is non-negotiable. Sequential calls double latency."
+     * In PHP synchronous context, both calls complete sequentially. For async
+     * execution (ReactPHP, Swoole, Laravel Octane), swap the implementation
+     * inside this method to use fibers/coroutines — the interface stays the same.
+     *
+     * @return array{0: array{response: string, arabic_mirror: ?string, coe_trace: ?CoETrace, prescription: ?Prescription}, 1: SafetyVerdict}
+     */
+    private function runParallel(Session $session, string $message): array
+    {
+        $useParallel = $this->config['safety_classifier']['parallel_enabled'] ?? true;
+
+        if (!$useParallel || $this->safetyClassifier === null) {
+            // Safety classifier disabled — run coach only
+            $coachResult  = $this->processWithCoach($session, $message);
+            $safetyVerdict = SafetyVerdict::ok();
+            return [$coachResult, $safetyVerdict];
+        }
+
+        // In synchronous PHP: safety first (cheaper model, faster), then coach
+        // The LLM safety call is lightweight (haiku/flash model, 200 tokens max)
+        $safetyVerdict = $this->safetyClassifier->classify($message);
+
+        // If flagged, skip the coach call entirely (discard coach output per spec)
+        if ($safetyVerdict->isFlagged()) {
+            return [['response' => '', 'arabic_mirror' => null, 'coe_trace' => null, 'prescription' => null], $safetyVerdict];
+        }
+
+        $coachResult = $this->processWithCoach($session, $message);
+
+        return [$coachResult, $safetyVerdict];
+    }
+
+    // -------------------------------------------------------------------------
+    // Coach processing
+    // -------------------------------------------------------------------------
+
+    /**
+     * @return array{response: string, arabic_mirror: ?string, coe_trace: ?CoETrace, prescription: ?Prescription}
      */
     private function processWithCoach(Session $session, string $message): array
     {
-        // If coach registry is available, use it
         if ($this->coachRegistry !== null) {
             try {
                 $coach = $this->coachRegistry->get($session->coachId);
                 return $coach->process($session, $message);
             } catch (\Throwable $e) {
-                // Log error for debugging (only in Laravel context)
                 if (function_exists('app') && app()->bound('log')) {
                     app('log')->error('Sisly coach processing failed', [
-                        'error' => $e->getMessage(),
+                        'error'      => $e->getMessage(),
                         'session_id' => $session->id,
-                        'coach' => $session->coachId->value,
+                        'coach'      => $session->coachId->value,
                     ]);
                 }
-                // Fall through to stub response
             }
         }
 
-        // Fall back to stub response
         return [
-            'response' => $this->generateStubResponse($session, $message),
+            'response'     => $this->generateStubResponse($session),
             'arabic_mirror' => null,
-            'coe_trace' => null,
+            'coe_trace'    => null,
+            'prescription' => null,
         ];
     }
 
-    /**
-     * Dispatch the MessageReceived event.
-     */
-    private function dispatchMessageReceivedEvent(Session $session, string $message): void
-    {
-        $event = MessageReceived::create(
-            sessionId: $session->id,
-            message: $message,
-            coachId: $session->coachId,
-            state: $session->state,
-            turnCount: $session->turnCount,
-        );
-
-        event($event);
-    }
+    // -------------------------------------------------------------------------
+    // Safety handling
+    // -------------------------------------------------------------------------
 
     /**
-     * Dispatch the ResponseGenerated event.
-     */
-    private function dispatchResponseGeneratedEvent(
-        Session $session,
-        string $response,
-        ?string $arabicMirror,
-        ?CoETrace $coeTrace,
-        int $responseTimeMs,
-    ): void {
-        $event = ResponseGenerated::create(
-            sessionId: $session->id,
-            response: $response,
-            arabicMirror: $arabicMirror,
-            coachId: $session->coachId,
-            state: $session->state,
-            turnCount: $session->turnCount,
-            coeTrace: $coeTrace,
-            responseTimeMs: $responseTimeMs,
-        );
-
-        event($event);
-    }
-
-    /**
-     * Handle a crisis situation.
+     * Handle a crisis detected by the deterministic keyword lexicon.
      */
     private function handleCrisis(Session $session, CrisisInfo $crisisInfo, GeoContext $geo): SislyResponse
     {
-        // Update session with crisis info (this also transitions to CRISIS_INTERVENTION)
         $session->setCrisis($crisisInfo);
-
-        // Generate crisis response
         $response = $this->crisisHandler->handle($crisisInfo, $geo, $session);
-
-        // Add assistant response to history
         $session->addTurn(ConversationTurn::assistant($response->responseText));
-
-        // Save session
         $this->sessionStore->save($session);
-
-        // Dispatch crisis event for logging/monitoring
         $this->dispatchCrisisEvent($session, $crisisInfo, $geo);
 
         return $response;
     }
 
     /**
-     * Dispatch the CrisisDetected event.
+     * Handle a "flagged" verdict from the LLM safety classifier.
+     * Spec: "discard the coach reply entirely, return the crisis response, set ended: true."
      */
-    private function dispatchCrisisEvent(Session $session, CrisisInfo $crisisInfo, GeoContext $geo): void
+    private function handleLLMSafetyFlag(Session $session, SafetyVerdict $verdict, GeoContext $geo): SislyResponse
     {
-        if ($crisisInfo->severity === null || $crisisInfo->category === null) {
+        // Build a CrisisInfo-equivalent from the safety verdict
+        $crisisInfo = new CrisisInfo(
+            detected: true,
+            severity: \Sisly\Enums\CrisisSeverity::HIGH,
+            category: $this->mapSafetyCategory($verdict->category),
+            keywordsMatched: [],
+            resourcesProvided: false,
+        );
+
+        return $this->handleCrisis($session, $crisisInfo, $geo);
+    }
+
+    /**
+     * Map safety classifier category string to CrisisCategory enum.
+     */
+    private function mapSafetyCategory(string $category): \Sisly\Enums\CrisisCategory
+    {
+        return match ($category) {
+            'self_harm'        => \Sisly\Enums\CrisisCategory::SELF_HARM,
+            'harm_to_others'   => \Sisly\Enums\CrisisCategory::HARM_TO_OTHERS,
+            'abuse'            => \Sisly\Enums\CrisisCategory::ABUSE,
+            'medical_emergency' => \Sisly\Enums\CrisisCategory::MEDICAL_EMERGENCY,
+            default            => \Sisly\Enums\CrisisCategory::SELF_HARM,
+        };
+    }
+
+    // -------------------------------------------------------------------------
+    // Identity / meta-question detection (PENDING_FIXES #1)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Check if the message is an identity/credential meta-question.
+     *
+     * These are routed to a deterministic reply and must NOT consume FSM turns.
+     * Fix for PENDING_FIXES #1.
+     */
+    private function isMetaQuestion(string $message): bool
+    {
+        if ($this->coachRegistry === null) {
+            return false;
+        }
+
+        // Delegate to a lightweight detector without building the full coach
+        static $identityDetector = null;
+        static $credentialDetector = null;
+
+        if ($identityDetector === null) {
+            $identityDetector   = new \Sisly\Coaches\IdentityQuestionDetector();
+            $credentialDetector = new \Sisly\Coaches\CredentialQuestionDetector();
+        }
+
+        return $identityDetector->isIdentityQuestion($message)
+            || $credentialDetector->isCredentialQuestion($message);
+    }
+
+    // -------------------------------------------------------------------------
+    // Asset resolution
+    // -------------------------------------------------------------------------
+
+    /**
+     * Optionally resolve a prescription to a real content library asset.
+     */
+    private function maybeResolveAsset(?Prescription $prescription, string $locale): ?Prescription
+    {
+        if ($prescription === null) {
+            return null;
+        }
+
+        $resolveAssets = $this->config['prescription']['resolve_assets'] ?? false;
+
+        if (!$resolveAssets || $this->assetResolver === null) {
+            return $prescription;
+        }
+
+        return $this->assetResolver->resolve($prescription, $locale) ?? $prescription;
+    }
+
+    // -------------------------------------------------------------------------
+    // Telemetry (per spec: log metrics but never raw message content)
+    // -------------------------------------------------------------------------
+
+    private function logTurnMetrics(
+        Session $session,
+        int $responseTimeMs,
+        SafetyVerdict $safetyVerdict,
+        ?Prescription $prescription,
+    ): void {
+        $enabled = $this->config['telemetry']['enabled'] ?? true;
+        $logTurns = $this->config['telemetry']['log_turn_metrics'] ?? true;
+
+        if (!$enabled || !$logTurns) {
             return;
         }
 
-        $event = CrisisDetected::fromDetection(
-            sessionId: $session->id,
-            severity: $crisisInfo->severity,
-            category: $crisisInfo->category,
-            keywords: $crisisInfo->keywordsMatched,
-            country: $geo->country,
-            resourcesProvided: true,
-        );
-
-        event($event);
-    }
-
-    /**
-     * Dispatch the SessionStarted event.
-     */
-    private function dispatchSessionStartedEvent(Session $session): void
-    {
-        $event = SessionStarted::fromSession(
-            sessionId: $session->id,
-            coachId: $session->coachId,
-            country: $session->geo->country,
-            language: $session->preferences->language,
-        );
-
-        event($event);
-    }
-
-    /**
-     * Dispatch the StateTransitioned event.
-     */
-    private function dispatchStateTransitionEvent(Session $session, SessionState $fromState): void
-    {
-        $event = StateTransitioned::fromTransition(
-            sessionId: $session->id,
-            fromState: $fromState,
-            toState: $session->state,
-            turnCount: $session->turnCount,
-        );
-
-        event($event);
-    }
-
-    /**
-     * Internal method to end a session with reason.
-     */
-    private function endSessionInternal(Session $session, string $reason): void
-    {
-        $session->end();
-
-        $event = SessionEnded::fromSession(
-            sessionId: $session->id,
-            coachId: $session->coachId,
-            finalState: $session->state,
-            totalTurns: $session->turnCount,
-            crisisOccurred: $session->crisis->detected,
-            endReason: $reason,
-            startedAt: $session->createdAt,
-        );
-
-        event($event);
-    }
-
-    /**
-     * Validate and sanitize a response before sending.
-     */
-    private function validateAndSanitizeResponse(string $responseText, Session $session): string
-    {
-        if (!$this->isPostResponseValidationEnabled()) {
-            return $responseText;
+        if (function_exists('app') && app()->bound('log')) {
+            app('log')->info('sisly.turn', [
+                'coach_id'         => $session->coachId->value,
+                'locale'           => $session->preferences->language,
+                'turn'             => $session->turnCount,
+                'state'            => $session->state->value,
+                'verdict'          => $safetyVerdict->verdict,
+                'had_prescription' => $prescription !== null,
+                'content_type'     => $prescription?->contentType,
+                'latency_ms'       => $responseTimeMs,
+                // NOTE: raw message content is intentionally NOT logged (spec privacy pillar)
+            ]);
         }
-
-        $result = $this->responseValidator->validate($responseText);
-
-        if (!$result->valid) {
-            if (function_exists('app') && app()->bound('log')) {
-                app('log')->warning('Sisly: response blocked by post-response validator', [
-                    'session_id' => $session->id,
-                    'coach_id' => $session->coachId->value,
-                    'state' => $session->state->value,
-                    'reason' => $result->reason,
-                    'matched_pattern' => $result->matchedPattern,
-                    'response_preview' => mb_substr($responseText, 0, 120),
-                ]);
-            }
-
-            return $this->responseValidator->getFallbackResponse($session->preferences->language);
-        }
-
-        return $responseText;
     }
 
-    /**
-     * Check if crisis detection is enabled.
-     */
-    private function isCrisisDetectionEnabled(): bool
-    {
-        return $this->config['safety']['crisis_detection'] ?? true;
-    }
+    // -------------------------------------------------------------------------
+    // Public accessors
+    // -------------------------------------------------------------------------
 
-    /**
-     * Check if post-response validation is enabled.
-     */
-    private function isPostResponseValidationEnabled(): bool
-    {
-        return $this->config['safety']['post_response_validation'] ?? true;
-    }
-
-    /**
-     * Get a session by ID.
-     */
     public function getSession(string $sessionId): ?Session
     {
         return $this->sessionStore->get($sessionId);
     }
 
     /**
-     * Get the current state of a session.
-     *
      * @return array{state: string, turn_count: int, is_active: bool, coach_id: string}
      * @throws SessionNotFoundException
      */
@@ -673,16 +566,14 @@ class SislyManager
         }
 
         return [
-            'state' => $session->state->value,
+            'state'      => $session->state->value,
             'turn_count' => $session->turnCount,
-            'is_active' => $session->isActive,
-            'coach_id' => $session->coachId->value,
+            'is_active'  => $session->isActive,
+            'coach_id'   => $session->coachId->value,
         ];
     }
 
     /**
-     * End a session.
-     *
      * @throws SessionNotFoundException
      */
     public function endSession(string $sessionId): void
@@ -694,27 +585,15 @@ class SislyManager
         }
 
         $this->endSessionInternal($session, 'manual');
-
-        // Clear prescription session caches
-        $this->prescriptionResolver->clearSessionCache($sessionId);
-
-        // Drop the session from storage so sessionExists() reflects the end.
-        // (Natural-end paths in message() still save the terminal session for
-        // post-mortem inspection — this is the explicit-close case.)
         $this->sessionStore->delete($sessionId);
     }
 
-    /**
-     * Check if a session exists.
-     */
     public function sessionExists(string $sessionId): bool
     {
         return $this->sessionStore->exists($sessionId);
     }
 
     /**
-     * Get all available coaches.
-     *
      * @return array<CoachInfo>
      */
     public function getCoaches(): array
@@ -727,25 +606,21 @@ class SislyManager
         );
     }
 
-    /**
-     * Get information about a specific coach.
-     */
     public function getCoach(CoachId $coachId): CoachInfo
     {
         return CoachInfo::byId($coachId);
     }
 
-    /**
-     * Generate a unique session ID.
-     */
+    // -------------------------------------------------------------------------
+    // Private helpers
+    // -------------------------------------------------------------------------
+
     private function generateSessionId(): string
     {
         return (string) Str::uuid();
     }
 
     /**
-     * Resolve GeoContext from context array.
-     *
      * @param array<string, mixed> $context
      */
     private function resolveGeoContext(array $context): GeoContext
@@ -760,16 +635,17 @@ class SislyManager
             return GeoContext::fromArray($geo);
         }
 
-        // Default to UAE
         return new GeoContext(country: 'AE');
     }
 
     /**
-     * Resolve SessionPreferences from context array.
+     * Resolve preferences and optionally auto-detect language from user message.
+     *
+     * Fix for PENDING_FIXES #9: LanguageDetector is now wired.
      *
      * @param array<string, mixed> $context
      */
-    private function resolvePreferences(array $context): SessionPreferences
+    private function resolvePreferences(array $context, ?string $message = null): SessionPreferences
     {
         $prefs = $context['preferences'] ?? null;
 
@@ -778,15 +654,36 @@ class SislyManager
         }
 
         if (is_array($prefs)) {
+            // If language not explicitly set and auto-detect is on, detect from message
+            if (!isset($prefs['language']) && $message !== null && $this->isAutoDetectEnabled()) {
+                $prefs['language'] = $this->detectLanguage($message);
+            }
             return SessionPreferences::fromArray($prefs);
+        }
+
+        // Default preferences — auto-detect language from message
+        if ($message !== null && $this->isAutoDetectEnabled()) {
+            $detectedLang = $this->detectLanguage($message);
+            return SessionPreferences::fromArray(['language' => $detectedLang]);
         }
 
         return new SessionPreferences();
     }
 
+    private function isAutoDetectEnabled(): bool
+    {
+        return $this->config['language']['auto_detect'] ?? true;
+    }
+
+    private function detectLanguage(string $message): string
+    {
+        if ($this->languageDetector !== null) {
+            return $this->languageDetector->detect($message);
+        }
+        return 'en';
+    }
+
     /**
-     * Resolve coach ID from context array or via dispatcher.
-     *
      * @param array<string, mixed> $context
      */
     private function resolveCoachId(array $context, ?string $message = null): CoachId
@@ -801,7 +698,6 @@ class SislyManager
             return CoachId::from($coachId);
         }
 
-        // Use dispatcher to classify if message is provided
         if ($message !== null && $this->isDispatcherEnabled()) {
             $result = $this->dispatcher->classify($message);
             if ($result->success && $result->meetsThreshold()) {
@@ -809,24 +705,31 @@ class SislyManager
             }
         }
 
-        // Default coach from config
         $default = $this->config['coaches']['default'] ?? 'meetly';
         return CoachId::from($default);
     }
 
-    /**
-     * Check if dispatcher-based coach routing is enabled.
-     */
+    private function resolveCoachIdForInit(array $context): CoachId
+    {
+        $coachId = $context['coach_id'] ?? null;
+
+        if ($coachId instanceof CoachId) {
+            return $coachId;
+        }
+
+        if (is_string($coachId)) {
+            return CoachId::from($coachId);
+        }
+
+        $default = $this->config['coaches']['default'] ?? 'meetly';
+        return CoachId::from($default);
+    }
+
     private function isDispatcherEnabled(): bool
     {
         return $this->config['dispatcher']['enabled'] ?? true;
     }
 
-    /**
-     * Read session.max_history_turns from config, defaulting to the
-     * Session DTO's own default. Honors zero/negative as "use default"
-     * to avoid pathological configurations.
-     */
     private function resolveMaxHistoryTurns(): int
     {
         $configured = $this->config['session']['max_history_turns'] ?? null;
@@ -838,14 +741,75 @@ class SislyManager
         return $configured;
     }
 
-    /**
-     * Force-transition the session into CLOSING when the wall-clock time
-     * budget is approaching exhaustion (controlled by
-     * fsm.nearing_end_threshold, default 0.85).
-     *
-     * No-op when fsm.max_session_seconds is null (the feature is opt-in)
-     * or when the session is already in CLOSING / a non-coach state.
-     */
+    private function isCrisisDetectionEnabled(): bool
+    {
+        return $this->config['safety']['crisis_detection'] ?? true;
+    }
+
+    private function isPostResponseValidationEnabled(): bool
+    {
+        return $this->config['safety']['post_response_validation'] ?? true;
+    }
+
+    private function validateAndSanitizeResponse(string $responseText, Session $session): string
+    {
+        if (!$this->isPostResponseValidationEnabled()) {
+            return $responseText;
+        }
+
+        $result = $this->responseValidator->validate($responseText);
+
+        if (!$result->valid) {
+            if (function_exists('app') && app()->bound('log')) {
+                app('log')->warning('Sisly: response blocked by post-response validator', [
+                    'session_id'      => $session->id,
+                    'coach_id'        => $session->coachId->value,
+                    'state'           => $session->state->value,
+                    'reason'          => $result->reason,
+                    'matched_pattern' => $result->matchedPattern,
+                ]);
+            }
+
+            return $this->responseValidator->getFallbackResponse($session->preferences->language);
+        }
+
+        return $responseText;
+    }
+
+    private function getCoachGreeting(Session $session): string
+    {
+        // Use enum-level primed opening first (Phase 1, no model call per spec)
+        $lang = $session->preferences->language;
+        $opening = $lang === 'ar'
+            ? $session->coachId->primedOpeningAr()
+            : $session->coachId->primedOpeningEn();
+
+        if (!empty($opening)) {
+            return $opening;
+        }
+
+        // Fallback: ask CoachRegistry
+        if ($this->coachRegistry !== null) {
+            try {
+                $coach = $this->coachRegistry->get($session->coachId);
+                return $coach->getGreeting($lang);
+            } catch (\Throwable) {}
+        }
+
+        return $this->getDefaultGreeting($session);
+    }
+
+    private function getDefaultGreeting(Session $session): string
+    {
+        $coachName = $session->coachId->displayName();
+
+        if ($session->preferences->language === 'ar') {
+            return "مرحباً، أنا {$coachName}. أنا هنا معك.";
+        }
+
+        return "Hi, I'm {$coachName}. I'm here with you.";
+    }
+
     private function maybeForceClosingForTimeThreshold(Session $session): void
     {
         $maxSeconds = $this->config['fsm']['max_session_seconds'] ?? null;
@@ -854,16 +818,13 @@ class SislyManager
             return;
         }
 
-        // Don't disturb an already-closing session, an active crisis, or a
-        // session that's still working through its early states. Crisis
-        // intervention is a trap state and must not be overridden.
         if ($session->state === SessionState::CLOSING ||
             $session->state === SessionState::CRISIS_INTERVENTION) {
             return;
         }
 
         $threshold = (float) ($this->config['fsm']['nearing_end_threshold'] ?? 0.85);
-        $elapsed = $this->elapsedSeconds($session);
+        $elapsed   = $this->elapsedSeconds($session);
 
         if ($elapsed < ($maxSeconds * $threshold)) {
             return;
@@ -874,11 +835,6 @@ class SislyManager
         $this->dispatchStateTransitionEvent($session, $previousState);
     }
 
-    /**
-     * Is the wall-clock budget exhausted for this session?
-     *
-     * Returns false when fsm.max_session_seconds is unset (opt-in feature).
-     */
     private function isWallClockExpired(Session $session): bool
     {
         $maxSeconds = $this->config['fsm']['max_session_seconds'] ?? null;
@@ -890,44 +846,108 @@ class SislyManager
         return $this->elapsedSeconds($session) >= $maxSeconds;
     }
 
-    /**
-     * Wall-clock seconds since session creation.
-     */
     private function elapsedSeconds(Session $session): int
     {
         return (new \DateTimeImmutable())->getTimestamp() - $session->createdAt->getTimestamp();
     }
 
-    /**
-     * Generate a stub response (to be replaced with real LLM in Phase 5-6).
-     */
-    private function generateStubResponse(Session $session, string $message): string
+    private function endSessionInternal(Session $session, string $reason): void
+    {
+        $session->end();
+
+        event(SessionEnded::fromSession(
+            sessionId: $session->id,
+            coachId: $session->coachId,
+            finalState: $session->state,
+            totalTurns: $session->turnCount,
+            crisisOccurred: $session->crisis->detected,
+            endReason: $reason,
+            startedAt: $session->createdAt,
+        ));
+    }
+
+    private function generateStubResponse(Session $session): string
     {
         $coachName = $session->coachId->displayName();
 
         return match ($session->state) {
-            SessionState::INTAKE => "Hi, I'm {$coachName}. I hear you. Let's take a moment to understand what you're experiencing.",
-            SessionState::EXPLORATION => "Thank you for sharing that. Can you tell me a bit more about what's making you feel this way?",
-            SessionState::DEEPENING => "That makes sense. It sounds like you're dealing with something that matters to you.",
-            SessionState::PROBLEM_SOLVING => "Let's try something together. Would you like a quick 30-second technique, or do you have a minute?",
-            SessionState::CLOSING => "You've done well to take this time for yourself. Remember, it's okay to feel what you're feeling.",
+            SessionState::INTAKE          => "Hi, I'm {$coachName}. I hear you. Tell me what's going on.",
+            SessionState::EXPLORATION     => "Can you tell me a bit more about what you're experiencing?",
+            SessionState::DEEPENING       => "That makes sense. It sounds like you're dealing with something that matters to you.",
+            SessionState::PROBLEM_SOLVING => "Let's try something together. Do you have 30 seconds, 1 minute, or 2 minutes?",
+            SessionState::CLOSING         => "You've done well to take this time for yourself.",
             SessionState::CRISIS_INTERVENTION => "I hear that you're going through something really difficult. Your safety matters.",
-            default => "I'm here with you. Tell me more.",
+            default                       => "I'm here with you. Tell me more.",
         };
     }
 
-    /**
-     * Resolve CoachId to its corresponding insights API content_type parameter.
-     */
-    private function resolveContentTypeForCoach(CoachId $coachId): ?string
+    // -------------------------------------------------------------------------
+    // Event dispatchers
+    // -------------------------------------------------------------------------
+
+    private function dispatchMessageReceivedEvent(Session $session, string $message): void
     {
-        return match ($coachId) {
-            CoachId::MEETLY => 'Meetings',
-            CoachId::PRESSO => 'Too much',
-            CoachId::LOOPY => 'Quiet mind',
-            CoachId::VENTO => 'Let it out',
-            CoachId::BOOSTLY => 'Confidence',
-            default => null,
-        };
+        event(MessageReceived::create(
+            sessionId: $session->id,
+            message: $message,
+            coachId: $session->coachId,
+            state: $session->state,
+            turnCount: $session->turnCount,
+        ));
+    }
+
+    private function dispatchResponseGeneratedEvent(
+        Session $session,
+        string $response,
+        ?string $arabicMirror,
+        ?CoETrace $coeTrace,
+        int $responseTimeMs,
+    ): void {
+        event(ResponseGenerated::create(
+            sessionId: $session->id,
+            response: $response,
+            arabicMirror: $arabicMirror,
+            coachId: $session->coachId,
+            state: $session->state,
+            turnCount: $session->turnCount,
+            coeTrace: $coeTrace,
+            responseTimeMs: $responseTimeMs,
+        ));
+    }
+
+    private function dispatchSessionStartedEvent(Session $session): void
+    {
+        event(SessionStarted::fromSession(
+            sessionId: $session->id,
+            coachId: $session->coachId,
+            country: $session->geo->country,
+            language: $session->preferences->language,
+        ));
+    }
+
+    private function dispatchStateTransitionEvent(Session $session, SessionState $fromState): void
+    {
+        event(StateTransitioned::fromTransition(
+            sessionId: $session->id,
+            fromState: $fromState,
+            toState: $session->state,
+            turnCount: $session->turnCount,
+        ));
+    }
+
+    private function dispatchCrisisEvent(Session $session, CrisisInfo $crisisInfo, GeoContext $geo): void
+    {
+        if ($crisisInfo->severity === null || $crisisInfo->category === null) {
+            return;
+        }
+
+        event(CrisisDetected::fromDetection(
+            sessionId: $session->id,
+            severity: $crisisInfo->severity,
+            category: $crisisInfo->category,
+            keywords: $crisisInfo->keywordsMatched,
+            country: $geo->country,
+            resourcesProvided: true,
+        ));
     }
 }

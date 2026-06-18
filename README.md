@@ -6,22 +6,12 @@
 
 <p align="center">
   <strong>AI Emotional Coaching for Laravel</strong><br>
-  Five specialized coaches helping users navigate anxiety, stress, anger, overthinking, and self-doubt.
-</p>
-
-<p align="center">
-  <a href="#installation">Installation</a> •
-  <a href="#quick-start">Quick Start</a> •
-  <a href="#coaches">Coaches</a> •
-  <a href="#configuration">Configuration</a> •
-  <a href="#api-reference">API Reference</a> •
-  <a href="#safety">Safety</a>
+  Six specialized coaches, parallel safety classifier, content prescription handoff, and full Arabic/Gulf dialect support for the GCC market.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/PHP-8.2%2B-777BB4?logo=php" alt="PHP 8.2+"/>
   <img src="https://img.shields.io/badge/Laravel-10%20|%2011%20|%2012-FF2D20?logo=laravel" alt="Laravel 10 | 11 | 12"/>
-  <img src="https://img.shields.io/badge/Tests-572%20passing-brightgreen" alt="Tests"/>
   <img src="https://img.shields.io/badge/License-Proprietary-blue" alt="License"/>
 </p>
 
@@ -29,293 +19,260 @@
 
 ## Overview
 
-Sisly is a Laravel package that provides AI-powered emotional coaching through six specialized coaches, each designed to help users with specific emotional challenges. Built for the GCC market, it includes full Arabic support with Gulf dialect translations.
+Sisly is a Laravel package that provides AI-powered emotional coaching following the **Sisly method**: a primed opening → understand and validate → detect mood → hand off with a content prescription → keep talking. The chat only ends on a crisis — the content recommendation never ends it.
+
+### Architecture
+
+```
+User message
+    │
+    ├─► [1] DETERMINISTIC crisis keyword check (always, before any LLM call)
+    │         └─ flagged → CrisisHandler (no LLM, hard-coded response + resources)
+    │
+    ├─► [2] PARALLEL calls:
+    │         ├─ Safety classifier (cheap model, SAFETY_SYS prompt) → SafetyVerdict
+    │         └─ Coach (full model, SHARED_SPINE + PERSONA) → coach_text [+ ```sisly block]
+    │
+    ├─► Safety verdict override: if flagged → discard coach output → CrisisHandler
+    │
+    ├─► Parse ```sisly block (prescription) if present
+    │
+    └─► Return { safety, coach_text, prescription, ended }
+```
 
 ### Key Features
 
-- **6 Specialized Coaches** — MEETLY (meeting/presentation anxiety), VENTO (anger), LOOPY (overthinking), PRESSO (overwhelm), BOOSTLY (self-doubt), SAFEO (uncertainty / big decisions)
-- **Safety First** — Crisis detection with deterministic keyword matching, never relies on LLM for safety
-- **Arabic Support** — Full bilingual support with Gulf dialect (Khaleeji) translations
-- **LLM Failover** — Automatic failover between OpenAI and Gemini providers
-- **Session Management** — Persistent sessions with configurable storage (Cache/Redis)
-- **Chain of Empathy** — Proprietary reasoning framework for empathetic responses
-- **Finite State Machine** — Structured conversation flow from intake to closing
-- **Configurable Session Length** *(v1.2.1)* — Optional wall-clock time cap (`fsm.max_session_seconds`) and graceful CLOSING wrap-up via the `fsm.end_on_terminal_state` flag. Transition bridges (`global/transitions.md`) carry context across FSM phase shifts so the bot never feels like it changed gears mid-conversation. See `CHANGELOG.md` for the recommended "engaging 10-minute" config.
-- **Content Prescription & Caching** *(v1.3.0)* — Dynamically suggests 2-minute media assets (guided audio, sound, meditation) based on coach recommendations. Caches pools from the host application's `/v1/insights/by-type` endpoint and tracks served items to avoid repeats.
+- **6 Coaches** — MEETLY 📅 (meetings), VENTO 💬 (anger), LOOPY 🧠 (overthinking), PRESSO ⏳ (overwhelm), BOOSTLY ⚡ (self-doubt), SAFEO 🧭 (uncertainty)
+- **Two-Tier Safety** — Deterministic keyword lexicon (pre-LLM) + LLM safety classifier (parallel)
+- **Content Prescription** — Coach emits a ` ```sisly ``` ` block at handoff; package parses and optionally resolves to your content library
+- **Two-Tier Models** — Coach model (full quality) + Safety/Dispatcher model (cheap/fast)
+- **Arabic/Gulf Support** — Single-language mode; auto-detects EN/AR from first message
+- **LLM Failover** — Circuit-breaker with automatic fallback across providers
+- **Session Management** — Persistent sessions with Cache/Redis
+- **Chain of Empathy** — Internal reasoning framework (CoE) that informs responses
 
 ---
 
 ## Installation
 
-### Requirements
-
-- PHP 8.2 or higher
-- Laravel 10.x, 11.x, or 12.x (any supported version)
-- OpenAI API key and/or Google Gemini API key
-
-### Install via Composer
-
 ```bash
 composer require sisly/sisly-laravel
-```
-
-### Publish Configuration
-
-```bash
 php artisan vendor:publish --tag=sisly-config
 ```
 
 ### Environment Variables
 
-Add to your `.env` file:
-
 ```env
-# Primary LLM Provider (openai or gemini)
-SISLY_LLM_DRIVER=openai
+# Provider (anthropic recommended for this use case)
+SISLY_LLM_DRIVER=anthropic
 
-# OpenAI Configuration
-OPENAI_API_KEY=sk-your-openai-api-key
-OPENAI_MODEL=gpt-4-turbo
+# Anthropic — coach model + safety model (cheaper tier)
+ANTHROPIC_API_KEY=sk-ant-your-key
+ANTHROPIC_MODEL=claude-sonnet-4-5
+ANTHROPIC_SAFETY_MODEL=claude-haiku-4-5
 
-# Gemini Configuration (for failover)
-GEMINI_API_KEY=your-gemini-api-key
-GEMINI_MODEL=gemini-pro
+# OpenAI (failover)
+OPENAI_API_KEY=sk-your-openai-key
+OPENAI_MODEL=gpt-4o
+OPENAI_SAFETY_MODEL=gpt-4o-mini
 
-# Enable/Disable Failover
-SISLY_LLM_FAILOVER=true
+# Gemini (failover)
+GEMINI_API_KEY=your-gemini-key
+GEMINI_MODEL=gemini-1.5-pro
+GEMINI_SAFETY_MODEL=gemini-1.5-flash
 ```
 
 ---
 
 ## Quick Start
 
-### Basic Usage
+### 1. Primed Opening (Phase 1, no model call)
+
+The spec says the coach's opening is pre-written — no backend call until the user types.
 
 ```php
 use Sisly\Facades\Sisly;
+use Sisly\Enums\CoachId;
 
-// Start a new coaching session (session ID is auto-generated)
+// Server-side primed opening (initSession)
+$response = Sisly::initSession([
+    'coach_id' => 'meetly',
+    'preferences' => ['language' => 'en'],
+]);
+echo $response->responseText;
+// "Hi, I'm Meetly. Big meeting on your mind? Let's get you steady. ..."
+
+$sessionId = $response->sessionId;
+
+// Or get the opening text from the enum directly (client-side)
+echo CoachId::MEETLY->primedOpeningEn();
+```
+
+### 2. User Sends First Message
+
+```php
 $response = Sisly::startSession(
-    message: "I've been feeling really anxious about my presentation tomorrow",
+    message: "I have a presentation in 20 minutes and my hands are shaking",
     context: [
-        'coach' => 'meetly',      // Optional: force specific coach
-        'country' => 'AE',        // Optional: for crisis resources
+        'coach_id' => 'meetly',          // or let the Dispatcher pick
+        'preferences' => ['language' => 'en'],
+        'geo' => ['country' => 'AE'],
     ]
 );
 
-// Get the session ID from the response for subsequent calls
 $sessionId = $response->sessionId;
 
 echo $response->responseText;
-// "I hear you - presentations can bring up a lot of anxiety..."
+// "Big meeting energy — that's your body getting ready for something that matters.
+//  Is it about being judged, or more about blanking on what to say?"
 
-echo $response->arabicMirror;
-// "أسمعك - العروض التقديمية ممكن تسبب قلق كبير..."
-
-// Continue the conversation using the session ID
-$response = Sisly::message($sessionId, "Yes, I keep thinking about everything that could go wrong");
-
-// Check session state
-$state = Sisly::getState($sessionId);
-echo $state['state']; // "exploration"
-
-// End session
-Sisly::endSession($sessionId);
+echo $response->safetyVerdict->verdict;  // "ok"
+var_dump($response->prescription);       // null (not handoff turn yet)
+echo $response->sessionComplete;         // false
 ```
 
-### Using Dependency Injection
+### 3. Conversation Turn
 
 ```php
-use Sisly\SislyManager;
+$response = Sisly::message($sessionId, "I'm scared they'll judge my ideas");
 
-class CoachingController extends Controller
+echo $response->responseText;
+// "That fear of judgment makes total sense before a big moment. ..."
+
+// Check safety badge
+echo $response->safetyVerdict->verdict; // "ok" | "checking" | "flagged"
+```
+
+### 4. Handoff Turn (prescription block)
+
+```php
+// After 3-4 turns, the coach hands off with a prescription
+$response = Sisly::message($sessionId, "I feel a bit more ready but still jittery");
+
+if ($response->prescription !== null) {
+    echo $response->prescription->contentType; // "Meditation"
+    echo $response->prescription->currentMood; // "Anxious"
+    echo $response->prescription->targetMood;  // "Calm"
+    echo $response->prescription->reason;      // "A quick grounding before you walk in."
+    echo $response->prescription->assetId;     // "lib_xyz" (if AssetResolver is wired)
+    echo $response->prescription->assetUrl;    // "https://..." (if AssetResolver is wired)
+}
+
+// Chat stays open — user can continue after the prescription
+echo $response->sessionComplete; // false
+```
+
+### 5. Crisis Response
+
+```php
+$response = Sisly::message($sessionId, "I want to end my life");
+
+echo $response->safetyVerdict->verdict;   // "flagged"
+echo $response->crisis->detected;         // true
+echo $response->sessionComplete;          // true (ended: true in spec)
+echo $response->responseText;
+// "I hear that you're going through something really difficult right now.
+//  Your safety matters deeply. Please reach out to UAE HOPE line 800 4673..."
+```
+
+---
+
+## Response Object
+
+```php
+$response->sessionId          // Unique session identifier
+$response->coachId            // CoachId enum
+$response->coachName          // "MEETLY" etc
+$response->responseText       // Coach message (coach_text in spec)
+$response->safetyVerdict      // SafetyVerdict — verdict, category, rationale
+$response->prescription       // Prescription|null — content handoff (null until handoff turn)
+$response->sessionComplete    // bool (ended in spec)
+$response->state              // SessionState enum
+$response->turnCount          // int
+$response->crisis             // CrisisInfo — detected, severity, category
+$response->handoffSuggested   // string|null — coach handoff suggestion
+$response->coeTrace           // CoETrace|null (only when includeCoETrace=true)
+```
+
+---
+
+## Wiring Your Content Library
+
+```php
+use Sisly\Contracts\AssetResolverInterface;
+use Sisly\DTOs\Prescription;
+
+class MyAssetResolver implements AssetResolverInterface
 {
-    public function __construct(
-        private SislyManager $sisly
-    ) {}
-
-    public function start(Request $request)
+    public function resolve(Prescription $prescription, string $locale): ?Prescription
     {
-        $response = $this->sisly->startSession(
-            message: $request->input('message'),
-            context: [
-                'country' => $request->input('country', 'AE'),
-            ]
+        // Query your library filtered by content_type + locale + mood pair
+        $asset = MyLibrary::find(
+            contentType: $prescription->contentType,
+            locale: $locale,
+            currentMood: $prescription->currentMood,
+            targetMood: $prescription->targetMood,
         );
 
-        return response()->json([
-            'session_id' => $response->sessionId,
-            'message' => $response->responseText,
-            'arabic' => $response->arabicMirror,
-            'state' => $response->state->value,
-            'coach' => $response->coachName,
-        ]);
-    }
+        if ($asset === null) {
+            return null; // Coach will try a different content_type next turn
+        }
 
-    public function chat(Request $request)
-    {
-        $response = $this->sisly->message(
-            sessionId: $request->input('session_id'),
-            message: $request->input('message')
+        return new Prescription(
+            contentType: $prescription->contentType,
+            currentMood: $prescription->currentMood,
+            targetMood: $prescription->targetMood,
+            reason: $prescription->reason,
+            assetId: $asset->id,
+            assetUrl: $asset->streamingUrl,
         );
-
-        return response()->json([
-            'message' => $response->responseText,
-            'arabic' => $response->arabicMirror,
-            'state' => $response->state->value,
-            'coach' => $response->coachName,
-        ]);
     }
 }
 ```
 
-### API Endpoint Example
-
 ```php
-// routes/api.php
-Route::prefix('coaching')->group(function () {
-    Route::post('/start', [CoachingController::class, 'start']);
-    Route::post('/message', [CoachingController::class, 'message']);
-    Route::get('/state', [CoachingController::class, 'state']);
-    Route::post('/end', [CoachingController::class, 'end']);
-});
+// config/sisly.php
+'prescription' => [
+    'resolve_assets' => true,
+    'asset_resolver' => MyAssetResolver::class,
+    'locale_strict' => true, // Never recommend English asset in Arabic chat
+],
 ```
 
 ---
 
 ## Coaches
 
-Sisly includes five specialized coaches, each designed for specific emotional challenges:
-
-| Coach | Focus | Trigger Keywords |
-|-------|-------|------------------|
-| **MEETLY** | Anxiety & Worry | anxious, worried, nervous, panic, fear |
-| **VENTO** | Anger & Frustration | angry, frustrated, furious, irritated, mad |
-| **LOOPY** | Overthinking & Rumination | overthinking, can't stop thinking, stuck in my head |
-| **PRESSO** | Overwhelm & Pressure | overwhelmed, too much, can't cope, stressed |
-| **BOOSTLY** | Self-Doubt & Confidence | not good enough, imposter, doubt myself, insecure |
-
-### Automatic Coach Selection
-
-The Dispatcher automatically routes users to the most appropriate coach based on their initial message:
-
-```php
-// User describes anxiety → routed to MEETLY
-$response = Sisly::startSession("I'm so anxious about the meeting");
-echo $response->coachName; // "MEETLY"
-
-// User describes anger → routed to VENTO
-$response = Sisly::startSession("I'm furious at my coworker");
-echo $response->coachName; // "VENTO"
-```
-
-### Manual Coach Selection
-
-```php
-$response = Sisly::startSession(
-    message: "I need help with something",
-    context: ['coach' => 'presso']  // Force specific coach
-);
-```
-
----
-
-## Session Flow
-
-Each coaching session follows a structured flow managed by a Finite State Machine:
-
-```
-┌─────────┐     ┌─────────────┐     ┌─────────────┐     ┌──────────┐     ┌─────────────────┐     ┌─────────┐
-│  INTAKE │ ──▶ │ RISK_TRIAGE │ ──▶ │ EXPLORATION │ ──▶ │ DEEPENING│ ──▶ │ PROBLEM_SOLVING │ ──▶ │ CLOSING │
-└─────────┘     └─────────────┘     └─────────────┘     └──────────┘     └─────────────────┘     └─────────┘
-                       │
-                       │ (if crisis detected)
-                       ▼
-              ┌───────────────────┐
-              │ CRISIS_INTERVENTION│  ◀── Safety trap state (no exit)
-              └───────────────────┘
-```
-
-### State Descriptions
-
-| State | Purpose | Turn Limit |
-|-------|---------|------------|
-| **Intake** | Gather initial information | 1 |
-| **Risk Triage** | Safety assessment | 0 (auto) |
-| **Exploration** | Understand the situation | 2 |
-| **Deepening** | Explore emotions deeper | 1 |
-| **Problem Solving** | Provide techniques/strategies | 3 |
-| **Closing** | Wrap up session | 1 |
-| **Crisis Intervention** | Safety response | ∞ (trapped) |
-
----
-
-## Content Prescription
-
-During the `PROBLEM_SOLVING` phase (technique state), a coach may recommend a short, 2-minute media asset (sound, meditation, affirmation, etc.). 
-
-### 1. API Call & Caching
-When a session is initialized or started, the package automatically warms the content pool by making an HTTP call to the host application (configured via `prescription.api_url`):
-```
-GET https://api.sisly.ai/api/v1/insights/by-type?content_type={Meetings|Too much|Quiet mind|Let it out|Confidence}&local={en|ar}
-```
-The returned JSON array is stored in Cache for `cache_ttl` seconds.
-
-### 2. Resolution & Served Tracking
-When the LLM outputs a `sisly` block (e.g., suggesting a content type and providing a warm reason), the resolver:
-- Filters out any `content_id`s that have already been suggested to the user during this session (tracked under `sisly:served_content:{sessionId}`).
-- Selects an unserved item randomly.
-- Marks the selected item as served.
-- **Exhaustion recycle**: If all items in the pool have been served, the served history for that session is cleared, making all items in the pool available again.
-- Returns a `ResolvedPrescription` payload inside the `SislyResponse`.
-
-```php
-$response = Sisly::message($sessionId, "I want to relax now.");
-
-if ($response->prescription !== null) {
-    echo $response->prescription->contentId;      // 999
-    echo $response->prescription->title;          // "Settle Your Mind"
-    echo $response->prescription->mediaCategory;  // "Sound"
-    echo $response->prescription->audioPath;      // "https://..."
-    echo $response->prescription->reason;         // "Take a break and listen to this."
-}
+| Coach | Emoji | Focus | Primed Opening (EN) |
+|-------|-------|-------|---------------------|
+| **MEETLY** | 📅 | Meeting & presentation anxiety | "Hi, I'm Meetly. Big meeting on your mind?..." |
+| **VENTO** | 💬 | Anger & frustration release | "Hi, I'm Vento. Sometimes you just need to get it out..." |
+| **LOOPY** | 🧠 | Rumination & overthinking | "Hi, I'm Loopy. When the mind won't stop spinning..." |
+| **PRESSO** | ⏳ | Work pressure & overwhelm | "Hey, I'm Presso. When it's all too much at once..." |
+| **BOOSTLY** | ⚡ | Self-doubt & imposter feelings | "Hey, I'm Boostly. Running on empty?..." |
+| **SAFEO** | 🧭 | Uncertainty & big decisions | "Hi, I'm Safeo. When things feel uncertain..." |
 
 ---
 
 ## Safety
 
-### Crisis Detection
+### Two Layers
 
-Sisly includes a **deterministic** crisis detection system that runs BEFORE any LLM calls:
+1. **Deterministic keyword lexicon** — runs before any LLM call; never disabled
+2. **LLM safety classifier** — runs in parallel with the coach; uses the cheap safety model tier
 
-```php
-// Crisis detection is automatic - no configuration needed
-$response = Sisly::startSession(
-    message: "I want to end my life",
-    context: ['country' => 'SA']
-);
+### Crisis Response Format
 
-// Session immediately enters crisis state
-echo $response->state->value; // "crisis_intervention"
-echo $response->crisis->detected; // true
-
-// Crisis info includes severity and category
-echo $response->crisis->severity->value; // "critical"
-echo $response->crisis->category->value; // "suicide"
+```json
+{
+  "safety": { "verdict": "flagged", "category": "self_harm" },
+  "coach_text": "I hear that you're in a lot of pain right now. ...",
+  "prescription": null,
+  "ended": true
+}
 ```
 
-### Supported Crisis Categories
-
-- **Suicide** — Suicidal ideation or intent
-- **Self-Harm** — Self-injury behaviors
-- **Harm to Others** — Intent to harm others
-- **Abuse** — Currently experiencing abuse
-- **Medical Emergency** — Overdose, severe injury
-- **Psychosis** — Signs of psychotic symptoms
-
 ### GCC Crisis Resources
-
-Built-in crisis resources for all GCC countries:
 
 | Country | Emergency | Crisis Hotline |
 |---------|-----------|----------------|
@@ -326,318 +283,77 @@ Built-in crisis resources for all GCC countries:
 | Qatar | 999 | 16000 |
 | Oman | 9999 | 1212 |
 
-### Post-Response Validation
-
-All LLM responses are validated before being sent to users:
-
-```php
-// Automatic validation prevents harmful content
-// - Medical advice
-// - Diagnostic statements
-// - Directive language ("you should", "you must")
-// - Clinical terminology
-```
-
----
-
-## Arabic Support
-
-### Automatic Language Detection
-
-```php
-use Sisly\Arabic\LanguageDetector;
-
-$detector = new LanguageDetector();
-
-$detector->detect('Hello, how are you?'); // 'en'
-$detector->detect('مرحبا كيف حالك');      // 'ar'
-$detector->containsArabic('Hello أحمد');  // true
-```
-
-### Arabic Mirror Responses
-
-Every response includes an Arabic translation using Gulf dialect:
-
-```php
-$response = Sisly::message($sessionId, "I feel overwhelmed");
-
-echo $response->responseText;
-// "It sounds like you have a lot on your plate right now..."
-
-echo $response->arabicMirror;
-// "يبدو إنك عندك أشياء كثيرة الحين..."
-```
-
-### Configure Dialect
-
-```php
-// config/sisly.php
-'arabic' => [
-    'enabled' => true,
-    'dialect' => 'gulf',  // 'gulf' (Khaleeji) or 'msa' (Modern Standard Arabic)
-    'mirror_enabled' => true,
-],
-```
+> ⚠️ **HARD GATE**: The crisis copy and helpline numbers in the package are defaults. Replace with clinically-signed-off copy and verified UAE helplines before any real users. See `HARD_GATES.md`.
 
 ---
 
 ## Configuration
 
-### Full Configuration File
+See `config/sisly.php` for all options. Key sections:
 
 ```php
-// config/sisly.php
-return [
-    'llm' => [
-        'driver' => env('SISLY_LLM_DRIVER', 'openai'),
-        'failover_enabled' => env('SISLY_LLM_FAILOVER', true),
-        'failure_threshold' => 5,  // Circuit breaker threshold
-
-        'openai' => [
-            'api_key' => env('OPENAI_API_KEY'),
-            'model' => env('OPENAI_MODEL', 'gpt-4-turbo'),
-            'timeout' => 30,
-            'max_retries' => 3,
-        ],
-
-        'gemini' => [
-            'api_key' => env('GEMINI_API_KEY'),
-            'model' => env('GEMINI_MODEL', 'gemini-pro'),
-            'timeout' => 30,
-            'max_retries' => 3,
-        ],
+'llm' => [
+    'driver' => 'anthropic',   // Primary provider
+    'anthropic' => [
+        'model' => 'claude-sonnet-4-5',         // Coach model
+        'safety_model' => 'claude-haiku-4-5',   // Safety/dispatcher model
     ],
-
-    'session' => [
-        'driver' => env('SISLY_SESSION_DRIVER', 'cache'),
-        'prefix' => 'sisly:session:',
-        'ttl' => 1800,  // 30 minutes
-    ],
-
-    'coaches' => [
-        'default' => 'meetly',
-        'enabled' => ['meetly', 'vento', 'loopy', 'presso', 'boostly'],
-    ],
-
-    'safety' => [
-        'crisis_detection' => true,  // Never disable in production!
-        'post_response_validation' => true,
-    ],
-
-    'arabic' => [
-        'enabled' => true,
-        'dialect' => 'gulf',
-        'mirror_enabled' => true,
-    ],
-
-    'prescription' => [
-        'enabled' => env('SISLY_PRESCRIPTION_ENABLED', true),
-        'api_url' => env('SISLY_PRESCRIPTION_API_URL', 'https://api.sisly.ai/api/v1/insights/by-type'),
-        'cache_ttl' => env('SISLY_PRESCRIPTION_CACHE_TTL', 1800), // 30 minutes
-        'max_tokens_handoff' => env('SISLY_PRESCRIPTION_MAX_TOKENS_HANDOFF', 400),
-    ],
-];
+],
+'safety_classifier' => [
+    'parallel_enabled' => true,
+    'fail_closed_verdict' => 'checking',        // Never crash on parse error
+],
+'fsm' => [
+    'end_on_terminal_state' => false,  // Chat stays open after prescription
+    'max_total_turns' => 40,
+],
+'prescription' => [
+    'resolve_assets' => false,      // Set true + wire AssetResolver
+    'locale_strict' => true,        // Never mix locales
+],
+'language' => [
+    'auto_detect' => true,          // Detect EN/AR from first message
+],
+'telemetry' => [
+    'enabled' => true,
+    'log_message_content' => false, // NEVER log raw messages (privacy)
+],
 ```
-
-See [CONFIGURATION.md](docs/CONFIGURATION.md) for detailed documentation.
 
 ---
 
-## API Reference
+## Hard Gates (do not ship to real users until all green)
 
-### Facade Methods
+- [ ] Qualified mental-health professional sign-off on coach prompts AND SAFETY_SYS in **EN and AR**
+- [ ] Verified, current UAE crisis helpline number + routing copy locked in both languages
+- [ ] Arabic-language safety red-team on Gulf dialect and code-switched samples
+- [ ] Native GCC Arabic copywriter authored persona openings in Arabic (not translations)
+- [ ] Content library has at least one asset per `content_type` per `locale`
+- [ ] Patent provisional + FTO confirmed before public disclosure
 
-```php
-use Sisly\Facades\Sisly;
+---
 
-// Start a new session (session ID is auto-generated)
-Sisly::startSession(
-    string $message,
-    array $context = []   // Optional: ['coach' => 'meetly', 'country' => 'AE']
-): SislyResponse;
-
-// Send a message to existing session
-Sisly::message(string $sessionId, string $message): SislyResponse;
-
-// Get current session state
-Sisly::getState(string $sessionId): array;
-// Returns: ['state' => 'exploration', 'turn_count' => 2, 'is_active' => true, 'coach_id' => 'meetly']
-
-// End a session
-Sisly::endSession(string $sessionId): void;
-
-// Check if session exists
-Sisly::sessionExists(string $sessionId): bool;
-```
-
-### Response Object
+## Events
 
 ```php
-class SislyResponse
-{
-    public string $sessionId;              // Unique session identifier
-    public CoachId $coachId;               // Coach enum
-    public string $coachName;              // Coach display name
-    public string $responseText;           // English response
-    public ?string $arabicMirror;          // Arabic translation
-    public SessionState $state;            // Current FSM state
-    public int $turnCount;                 // Current turn number
-    public CrisisInfo $crisis;             // Crisis info (check $crisis->detected, ->severity, ->category)
-    public ?CoETrace $coeTrace;            // Chain of Empathy reasoning trace
-    public bool $sessionComplete;          // Is session finished?
-    public ?string $handoffSuggested;      // Suggested coach handoff
-    public DateTimeImmutable $timestamp;   // Response timestamp
-    public ?ResolvedPrescription $prescription; // Suggested media asset (if any) containing contentId, title, duration, audioPath, etc.
-}
-```
+use Sisly\Events\{SessionStarted, MessageReceived, ResponseGenerated,
+                  StateTransitioned, SessionEnded, CrisisDetected, LLMFailoverOccurred};
 
-### Events
-
-```php
-use Sisly\Events\SessionStarted;
-use Sisly\Events\MessageReceived;
-use Sisly\Events\ResponseGenerated;
-use Sisly\Events\StateTransitioned;
-use Sisly\Events\SessionEnded;
-use Sisly\Events\CrisisDetected;
-use Sisly\Events\LLMFailoverOccurred;
-
-// Listen to events
 Event::listen(CrisisDetected::class, function ($event) {
     Log::critical('Crisis detected', [
         'session_id' => $event->sessionId,
-        'category' => $event->category,
-        'severity' => $event->severity,
+        'category'   => $event->category,
+        'severity'   => $event->severity,
+        // NOTE: message content is NOT on this event (privacy)
     ]);
-
-    // Notify support team, etc.
 });
 ```
 
 ---
 
-## Testing
-
-### Run Tests
-
-```bash
-# Run unit tests (default, no API keys required)
-composer test
-
-# Run with coverage
-./vendor/bin/phpunit --coverage-html coverage/
-
-# Run specific test suite
-./vendor/bin/phpunit tests/Unit/Safety/
-```
-
-### Integration Tests (Live LLM)
-
-Integration tests make real API calls to test full conversation flows. They are **skipped by default** and only run when API keys are configured.
-
-```bash
-# 1. Copy the example environment file
-cp .env.testing.example .env.testing
-
-# 2. Add your API keys to .env.testing
-# OPENAI_API_KEY=sk-your-key-here
-
-# 3. Run integration tests
-composer test:integration
-
-# Or run with environment variable directly
-OPENAI_API_KEY=sk-xxx ./vendor/bin/phpunit --testsuite Integration
-```
-
-Integration tests verify:
-- Live OpenAI/Gemini API connectivity
-- Full conversation flows with real LLM responses
-- Multi-turn context preservation
-- Arabic mirror generation
-- Response quality (not generic fallbacks)
-
-### Test with Mock Provider
-
-```php
-// In tests, use the mock provider
-config(['sisly.llm.driver' => 'mock']);
-
-// Or inject mock responses
-$mock = app(MockProvider::class);
-$mock->addResponse('anxiety', 'I understand you feel anxious...');
-```
-
----
-
-## Extending
-
-### Custom Coaches
-
-```php
-use Sisly\Coaches\BaseCoach;
-use Sisly\Contracts\CoachInterface;
-use Sisly\Enums\CoachId;
-use Sisly\Enums\SessionState;
-
-class CustomCoach extends BaseCoach implements CoachInterface
-{
-    public function getId(): CoachId
-    {
-        return CoachId::MEETLY; // Replace with your own enum value
-    }
-
-    public function getName(): string
-    {
-        return 'Custom Coach';
-    }
-
-    public function getDescription(): string
-    {
-        return 'Custom emotional support';
-    }
-
-    public function getSystemPrompt(SessionState $state): string { /* ... */ }
-    public function getStatePrompt(SessionState $state): string { /* ... */ }
-    public function getDomains(): array { return ['custom-domain']; }
-    public function getTriggers(): array { return ['custom-keyword']; }
-}
-
-// Register in service provider
-$registry = app(CoachRegistry::class);
-$registry->register(new CustomCoach($llm, $promptLoader));
-```
-
-See [EXTENDING.md](docs/EXTENDING.md) for detailed documentation.
-
----
-
-## Security
-
-### Reporting Vulnerabilities
-
-If you discover a security vulnerability, please email security@sisly.ai. Do not open a public issue.
-
-### Security Best Practices
-
-1. **Never disable crisis detection** in production
-2. **Always validate** user input before passing to Sisly
-3. **Monitor** crisis events and LLM failovers
-4. **Keep API keys** in environment variables, never in code
-5. **Use HTTPS** for all API communications
-
----
-
-## Support
-
-- **Documentation**: [docs/](docs/)
-- **Issues**: Contact your account representative
-- **Email**: support@sisly.ai
-
----
-
 ## License
 
-This package is proprietary software. Unauthorized copying, modification, distribution, or use is strictly prohibited. See [LICENSE](LICENSE) for details.
+Proprietary software. See [LICENSE](LICENSE).
 
 ---
 

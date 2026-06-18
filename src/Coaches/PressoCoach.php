@@ -100,21 +100,6 @@ class PressoCoach extends BaseCoach
         };
     }
 
-    protected function getInScopeDescription(): string
-    {
-        return 'deadline pressure, workload overwhelm, too many tasks at once, urgency overload, occupational stress, burnout warning signs, the feeling of drowning under responsibilities, inability to prioritise under pressure';
-    }
-
-    protected function getOutOfScopeDescription(): string
-    {
-        return 'meeting-specific anxiety (→ MEETLY), anger or resentment (→ VENTO), obsessive thought loops unrelated to workload (→ LOOPY), self-doubt or imposter syndrome (→ BOOSTLY), big life decisions or job-security fear (→ SAFEO), relationship advice, medical advice, productivity systems (Pomodoro, GTD etc.)';
-    }
-
-    protected function getHandoffInstruction(): string
-    {
-        return "Acknowledge the pressure first, then say: \"What you're describing sounds like it's moved beyond workload into [domain]. Would you like to talk to [COACH NAME] about that? I can help with the pressure and overwhelm piece.\"";
-    }
-
     /**
      * Get the system prompt for a specific state.
      */

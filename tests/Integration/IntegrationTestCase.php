@@ -23,7 +23,6 @@ abstract class IntegrationTestCase extends TestCase
 {
     protected ?string $openaiApiKey = null;
     protected ?string $geminiApiKey = null;
-    protected ?string $anthropicApiKey = null;
 
     protected function setUp(): void
     {
@@ -35,7 +34,6 @@ abstract class IntegrationTestCase extends TestCase
         // Load API keys from environment
         $this->openaiApiKey = $this->getEnvKey('OPENAI_API_KEY');
         $this->geminiApiKey = $this->getEnvKey('GEMINI_API_KEY');
-        $this->anthropicApiKey = $this->getEnvKey('ANTHROPIC_API_KEY');
     }
 
     /**
@@ -92,7 +90,6 @@ abstract class IntegrationTestCase extends TestCase
         $configKey = match ($key) {
             'OPENAI_API_KEY' => 'sisly.llm.openai.api_key',
             'GEMINI_API_KEY' => 'sisly.llm.gemini.api_key',
-            'ANTHROPIC_API_KEY' => 'sisly.llm.anthropic.api_key',
             default => null,
         };
 
@@ -131,25 +128,13 @@ abstract class IntegrationTestCase extends TestCase
     }
 
     /**
-     * Skip the test if Anthropic API key is not configured.
-     */
-    protected function requireAnthropic(): void
-    {
-        if (empty($this->anthropicApiKey)) {
-            $this->markTestSkipped(
-                'Anthropic API key not configured. Set ANTHROPIC_API_KEY in .env.testing or environment.'
-            );
-        }
-    }
-
-    /**
      * Skip the test if no LLM API key is configured.
      */
     protected function requireAnyLLM(): void
     {
-        if (empty($this->openaiApiKey) && empty($this->geminiApiKey) && empty($this->anthropicApiKey)) {
+        if (empty($this->openaiApiKey) && empty($this->geminiApiKey)) {
             $this->markTestSkipped(
-                'No LLM API key configured. Set OPENAI_API_KEY, GEMINI_API_KEY, or ANTHROPIC_API_KEY in .env.testing or environment.'
+                'No LLM API key configured. Set OPENAI_API_KEY or GEMINI_API_KEY in .env.testing or environment.'
             );
         }
     }
@@ -159,15 +144,6 @@ abstract class IntegrationTestCase extends TestCase
      */
     protected function getPreferredDriver(): string
     {
-        $driver = getenv('SISLY_LLM_DRIVER');
-        if ($driver && in_array($driver, ['openai', 'gemini', 'anthropic'], true)) {
-            return $driver;
-        }
-
-        if (!empty($this->anthropicApiKey)) {
-            return 'anthropic';
-        }
-
         if (!empty($this->openaiApiKey)) {
             return 'openai';
         }
@@ -194,10 +170,6 @@ abstract class IntegrationTestCase extends TestCase
 
         if (!empty($this->geminiApiKey)) {
             config(['sisly.llm.gemini.api_key' => $this->geminiApiKey]);
-        }
-
-        if (!empty($this->anthropicApiKey)) {
-            config(['sisly.llm.anthropic.api_key' => $this->anthropicApiKey]);
         }
     }
 

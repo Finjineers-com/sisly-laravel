@@ -152,7 +152,6 @@ class AnthropicProvider implements LLMProviderInterface
 
                 // Handle rate limiting
                 if ($statusCode === 429) {
-                    $lastError = "Rate limit exceeded (HTTP 429)";
                     $retryAfter = $response['headers']['Retry-After'][0] ?? null;
                     $delay = $retryAfter ? (int) $retryAfter * 1000 : $this->getBackoffDelay($attempt);
                     usleep($delay * 1000);
